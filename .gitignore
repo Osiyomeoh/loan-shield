@@ -1,0 +1,13 @@
+# Foundry
+out/
+cache/
+broadcast/*/*/dry-run/
+
+# App
+node_modules/
+.vercel/
+
+# Secrets: keys live only in your own .env, never in git
+.env
+.env.*
+!.env.example

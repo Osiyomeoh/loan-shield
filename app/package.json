@@ -1,0 +1,31 @@
+{
+  "name": "loan-shield-app",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "tsx --test --test-timeout=20000 test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "status": "tsx --env-file-if-exists=.env scripts/status.ts",
+    "buy-cirbtc": "tsx --env-file=.env scripts/buy-cirbtc.ts",
+    "open-loan": "tsx --env-file=.env scripts/open-loan.ts",
+    "protect": "tsx --env-file=.env scripts/protect.ts",
+    "register-webhook": "tsx --env-file=.env scripts/register-webhook.ts",
+    "keeper": "tsx --env-file=.env scripts/keeper.ts"
+  },
+  "dependencies": {
+    "@circle-fin/adapter-viem-v2": "1.19.0",
+    "@circle-fin/borrow-kit": "1.0.0",
+    "@circle-fin/swap-kit": "1.7.1",
+    "viem": "2.56.9"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

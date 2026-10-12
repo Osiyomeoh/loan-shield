@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Arc Foundry (circlefin/arc-foundry) release and the sha256 published with it
+  ARC_FOUNDRY_VERSION: v0.8.0-2
+  ARC_FOUNDRY_SHA256: 088bdb96a84418b757f9825d491e702792f1d1d1e29a9145af305a6600a79556
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Arc Foundry
+        run: |
+          asset="arc-foundry-${ARC_FOUNDRY_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/circlefin/arc-foundry/releases/download/${ARC_FOUNDRY_VERSION}/$asset"
+          echo "${ARC_FOUNDRY_SHA256}  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/arc-foundry"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/arc-foundry"
+          for bin in forge cast anvil; do
+            install -m 0755 "$RUNNER_TEMP/arc-foundry/$bin" "/usr/local/bin/arc-$bin"
+          done
+          arc-forge --version
+
+      - name: Contracts (fork tests run against Arc mainnet at a pinned block)
+        run: |
+          arc-forge build
+          arc-forge test -vv
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: App
+        working-directory: app
+        run: |
+          npm ci
+          npm run typecheck
+          REQUIRE_ARTIFACTS=1 npm test
+
+      - name: End to end on a local fork
+        run: scripts/e2e-local.sh
