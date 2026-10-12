@@ -124,24 +124,35 @@ export function toAssetsUp(shares, totalAssets, totalShares) {
   return (shares * (totalAssets + 1n) + d - 1n) / d;
 }
 
+/** Waits before each retry of a rate-limited request (HTTP 429, or 503): about 15 s in all before giving up. */
+export const RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
+const MAX_RETRY_AFTER_MS = 10_000;
+
 /**
  * Minimal JSON-RPC client. Reverts surface as errors carrying the revert `data`, as Arc's RPC and anvil return it.
+ * Arc's public RPC answers HTTP 429 under load, so those requests wait (at least `Retry-After`) and retry.
  * @param {string} url
  * @param {typeof fetch} [fetchImpl]
+ * @param {(ms: number) => Promise<void>} [sleep]
  */
-export function createRpc(url, fetchImpl = globalThis.fetch.bind(globalThis)) {
+export function createRpc(url, fetchImpl = globalThis.fetch.bind(globalThis), sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
   let id = 0;
   /** @param {string} method @param {unknown[]} params @returns {Promise<any>} */
   async function request(method, params) {
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
-    });
-    if (!res.ok) throw new Error(`RPC ${method}: HTTP ${res.status}`);
-    const body = await res.json();
-    if (body.error) throw Object.assign(new Error(`RPC ${method}: ${body.error.message}`), { data: body.error.data });
-    return body.result;
+    const payload = JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params });
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json" }, body: payload });
+      if ((res.status === 429 || res.status === 503) && attempt < RETRY_DELAYS_MS.length) {
+        await res.body?.cancel();
+        const retryAfter = Number(res.headers.get("retry-after")) * 1000 || 0;
+        await sleep(Math.min(Math.max(RETRY_DELAYS_MS[attempt] ?? 0, retryAfter), MAX_RETRY_AFTER_MS));
+        continue;
+      }
+      if (!res.ok) throw new Error(`RPC ${method}: HTTP ${res.status}`);
+      const body = await res.json();
+      if (body.error) throw Object.assign(new Error(`RPC ${method}: ${body.error.message}`), { data: body.error.data });
+      return body.result;
+    }
   }
   return {
     request,

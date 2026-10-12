@@ -237,6 +237,32 @@ test("findDeployBlock binary-searches the first block with code", async () => {
   await assert.rejects(web.findDeployBlock(rpc, SHIELD, latest), /no contract/);
 });
 
+test("the RPC client waits and retries when rate-limited, and gives up after the last delay", async () => {
+  const waits: number[] = [];
+  const sleep = async (ms: number) => void waits.push(ms);
+  const answers = [
+    () => new Response("slow down", { status: 429, headers: { "retry-after": "3" } }),
+    () => new Response("", { status: 503 }),
+    (id: number) => Response.json({ jsonrpc: "2.0", id, result: "0x10" }),
+  ];
+  let sent = 0;
+  const flaky = (async (_url: string, init: { body: string }) => answers[sent++]!(JSON.parse(init.body).id)) as unknown as typeof fetch;
+  assert.equal(await web.createRpc("http://rpc.test", flaky, sleep).blockNumber(), 16n);
+  assert.deepEqual(waits, [3000, 1000], "Retry-After when longer than the backoff, then the backoff");
+
+  waits.length = 0;
+  sent = 0;
+  const limited = (async () => (sent++, new Response("", { status: 429, headers: { "retry-after": "60" } }))) as unknown as typeof fetch;
+  await assert.rejects(web.createRpc("http://rpc.test", limited, sleep).blockNumber(), /RPC eth_blockNumber: HTTP 429/);
+  assert.equal(sent, web.RETRY_DELAYS_MS.length + 1);
+  assert.deepEqual(waits, web.RETRY_DELAYS_MS.map(() => 10_000), "a long Retry-After is capped");
+
+  sent = 0;
+  const down = (async () => (sent++, new Response("", { status: 500 }))) as unknown as typeof fetch;
+  await assert.rejects(web.createRpc("http://rpc.test", down, sleep).blockNumber(), /HTTP 500/);
+  assert.equal(sent, 1, "other HTTP errors are not retried");
+});
+
 function loan(p: { borrower: string; marketId: string }) {
   return { borrower: p.borrower, market: p.marketId };
 }

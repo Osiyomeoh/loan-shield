@@ -15,7 +15,7 @@ Arc's Borrow Kit lends USDC against cirBTC through Morpho Blue. When the loan's 
 | Part | Status |
 |---|---|
 | `LoanShield.sol` contract | **built**. 39 tests: unit, fuzz, invariant, and fork tests against the real Arc mainnet market |
-| Keeper (polling) and webhook receiver (`app/`) | **built**. 34 unit tests, plus end to end on a local fork of Arc mainnet |
+| Keeper (polling) and webhook receiver (`app/`) | **built**. 35 unit tests, plus end to end on a local fork of Arc mainnet |
 | End-to-end run on a local fork (`scripts/e2e-local.sh`) | **built**. 21 checks: a real loan in the real cirBTC market, rescued by the keeper and by the webhook, each exactly once |
 | Circle Kit scripts: `buy-cirbtc` (Swap Kit), `open-loan` and `register-webhook` (Borrow Kit), and the Borrow Kit column of `status` | **built and typechecked, not run yet**. They call Circle's live services, which a local fork can't provide, so they first run when the demo loan is opened on mainnet |
 | Web page (`app/public/`) | **built**. Tested on a local fork, at desktop and phone width, in light and dark mode |
@@ -83,7 +83,7 @@ You need [Arc Foundry](https://github.com/circlefin/arc-foundry) v0.8.0-2 (`arc-
 # Contracts: 39 tests. The fork tests read Arc mainnet at a pinned block through the public RPC.
 arc-forge test
 
-# App: typecheck and 34 unit tests (keeper, webhook, the web page's chain reader, ABI drift)
+# App: typecheck and 35 unit tests (keeper, webhook, the web page's chain reader, ABI drift)
 cd app && npm ci && npm run typecheck && npm test
 
 # End to end, 21 checks. Forks Arc mainnet locally, opens a real loan in the real cirBTC market with throwaway
@@ -133,6 +133,7 @@ These are things about Arc that surfaced while building, each reproduced by a te
 2. **The public RPC's `eth_getLogs` limit is 10,000 blocks, and it changed during the day.** Measured on `rpc.mainnet.arc.io` on 2026-10-12: a 10,000-block span passes, and a 10,001-block span fails with `-32012 "requested range too large"` (6 of 6 tries). Earlier the same day, it refused only spans over 100,000 blocks (`-32602`). The web page reads rescue history in 10,000-block chunks (`MAX_LOG_RANGE` in `shield.js`), and the end-to-end run checks the live limit, so a future change fails CI instead of the page.
 3. **"Cannot clear balance of empty account".** Under Arc Foundry, Arc's native-coin precompile reverts a transfer that would zero the balance of an account that has nonce 0 and no code. A real wallet has sent at least one transaction, so it never hits this, but fresh test addresses do. `test/fork/ArcFork.sol` gives funded test wallets nonce 1.
 4. **"Blocked address" in invariant tests.** Forge's invariant fuzzer also sends calls from address literals it finds in the source, such as USDC's `0x3600…0000`. Arc rejects transactions from those system addresses, so every invariant failed before its first call. `test/invariant/ShieldInvariant.t.sol` pins the senders with `targetSender`.
+5. **The public RPC rate-limits with HTTP 429.** On 2026-10-12, the first GitHub Actions run of this repo (run 38317579335) passed every fork check, then the read-only mainnet check got `HTTP 429` on an `eth_getCode` call. The fork had been reading from the same RPC from the same runner just before. The page's reader now waits and retries a 429 or 503 up to five times, at least as long as `Retry-After` asks, capped at 10 s (`createRpc` in `shield.js`). A unit test checks the retry, not the rate limit itself: the limit couldn't be triggered on demand.
 
 ## Cost
 
