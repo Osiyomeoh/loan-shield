@@ -19,7 +19,7 @@ Arc's Borrow Kit lends USDC against cirBTC through Morpho Blue. When the loan's 
 | End-to-end run on a local fork (`scripts/e2e-local.sh`) | **built**. 21 checks: a real loan in the real cirBTC market, rescued by the keeper and by the webhook, each exactly once |
 | Circle Kit scripts: `buy-cirbtc` (Swap Kit), `open-loan` and `register-webhook` (Borrow Kit), and the Borrow Kit column of `status` | **built and typechecked, not run yet**. They call Circle's live services, which a local fork can't provide, so they first run when the demo loan is opened on mainnet |
 | Web page (`app/public/`) | **built**. Tested on a local fork, at desktop and phone width, in light and dark mode |
-| CI (`.github/workflows/ci.yml`) | **built**. Runs all of the above, but it has not run on GitHub yet because the repo isn't pushed |
+| CI (`.github/workflows/ci.yml`) | **passes** on GitHub Actions: contracts 39/39, app 35/35 and the end-to-end run, first green on 2026-10-12 (run 38317984750) |
 | Deployed on Arc mainnet, verified on explorer.arc.io | **planned**. The address goes here once it is deployed |
 | Live mainnet rescue (transaction links) | **planned** |
 | Web page and webhook hosted on Vercel | **planned** |
