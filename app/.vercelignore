@@ -1,0 +1,14 @@
+# Upload only what the hosted site and webhook need. Vercel's CLI does not skip .env by default, so this allowlist
+# keeps your keys (app/.env) and the operator scripts off Vercel.
+/*
+!api
+!src
+!public
+!web
+web/node_modules
+web/dist
+!vercel.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!.vercelignore

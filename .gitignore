@@ -6,6 +6,7 @@ broadcast/*/*/dry-run/
 # App
 node_modules/
 .vercel/
+app/web/dist/
 
 # Secrets: keys live only in your own .env, never in git
 .env

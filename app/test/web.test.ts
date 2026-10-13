@@ -100,6 +100,42 @@ test("liquidation incentive at LLTV 0.86 is Morpho's 1.0438 (the 4.38% penalty)"
   assert.equal(web.liquidationIncentive(0n), 1.15);
 });
 
+test("repayToTarget is debt × (1 − HF / target), rounded up, and zero once the target is reached", () => {
+  assert.equal(web.repayToTarget(3_000_000n, (15n * WAD) / 10n, (18n * WAD) / 10n), 500_000n);
+  assert.equal(web.repayToTarget(1_000_000n, (13n * WAD) / 10n, (18n * WAD) / 10n), 277_778n, "277,777.7 rounds up");
+  assert.equal(web.repayToTarget(3_000_000n, 2n * WAD, (18n * WAD) / 10n), 0n);
+  // The live rescue in block 25,715,475 (README, "Live on Arc mainnet"): Rescued(assets 1,253,229, HF before
+  // 1.236048…, target 1.8). The debt was 4.000010 USDC: the borrower's 3,995,551,481,624 shares in block 25,715,474
+  // at the event's share price.
+  assert.equal(web.repayToTarget(4_000_010n, 1_236_048_468_890_944_995n, (18n * WAD) / 10n), 1_253_229n);
+});
+
+test("outlook turns HF, trigger and buffer into the BTC prices where a rescue starts and where liquidation is", () => {
+  const loanAt = (buffer: bigint) => ({ debt: 3_000_000n, buffer, healthFactor: 2n * WAD, trigger: (15n * WAD) / 10n, target: (18n * WAD) / 10n });
+  // HF 2 at $60k: rescues start at $45k (HF 1.5), liquidation is at $30k without the shield.
+  const full = web.outlook(loanAt(1_000_000n), 60_000)!;
+  assert.equal(full.rescuePrice, 45_000);
+  assert.equal(full.liquidationPrice, 30_000);
+  assert.equal(full.needed, 500_000n);
+  assert.equal(full.nextRepay, 500_000n, "the buffer covers the whole first rescue");
+  assert.equal(full.nextHealthAfter, (18n * WAD) / 10n);
+  assert.equal(full.protectedPrice, 20_000, "with 1 of 3 USDC repaid, liquidation needs a price a third lower");
+
+  const short = web.outlook(loanAt(400_000n), 60_000)!;
+  assert.equal(short.nextRepay, 400_000n, "capped by the buffer, as the contract caps it");
+  assert.equal(short.nextHealthAfter, (15n * WAD * 3_000_000n) / 10n / 2_600_000n);
+  assert.equal(short.protectedPrice, 26_000);
+
+  assert.equal(web.outlook(loanAt(9_000_000n), 60_000)!.protectedPrice, 0, "a buffer larger than the debt can repay all of it");
+  const empty = web.outlook(loanAt(0n), 60_000)!;
+  assert.deepEqual([empty.nextRepay, empty.protectedPrice], [0n, 30_000]);
+
+  const unprotected = web.outlook({ ...loanAt(1_000_000n), trigger: 0n, target: 0n }, 60_000)!;
+  assert.equal(unprotected.rescuePrice, undefined);
+  assert.equal(unprotected.protectedPrice, 30_000, "without a policy the buffer can't move, so it adds nothing");
+  assert.equal(web.outlook({ ...loanAt(1_000_000n), debt: 0n, healthFactor: maxUint256 }, 60_000), undefined);
+});
+
 /** A JSON-RPC endpoint backed by a handler, so the reader is exercised through the same fetch path a browser uses. */
 function fakeRpc(handler: (method: string, params: any[]) => unknown) {
   const calls: { method: string; params: any[] }[] = [];

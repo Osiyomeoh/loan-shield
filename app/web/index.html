@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Loan Shield · USDC that rescues your BTC loan on Arc</title>
+<meta name="description" content="Loan Shield keeps standby USDC next to your Morpho loan on Arc. When the loan nears liquidation, anyone can make it repay just enough to reach your target. No BTC sold, no fees.">
+<meta property="og:title" content="Loan Shield">
+<meta property="og:description" content="Standby USDC that rescues your BTC loan on Arc before a liquidator can take your collateral.">
+<meta name="theme-color" content="#05070d">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://images.unsplash.com">
+<script>
+  // Apply the saved or system theme before the first paint, so the page never flashes the wrong one.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("theme"); } catch (e) {}
+    if (t !== "light" && t !== "dark") t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body>
+<div id="root"></div>
+<noscript>Loan Shield reads Arc mainnet from your browser, so it needs JavaScript.</noscript>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

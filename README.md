@@ -8,6 +8,8 @@ Arc's Borrow Kit lends USDC against cirBTC through Morpho Blue. When the loan's 
 
 **What it uses Arc for:** the Borrow Kit loan and its Morpho Blue market on Arc mainnet, USDC as both the loan token and the gas token (a rescue costs under 0.004 USDC), Borrow Kit health-band webhooks to wake the keeper, Swap Kit to buy the demo cirBTC, and Arc Foundry to test against Arc mainnet's real state.
 
+**Live on Arc mainnet:** [the page](https://loan-shield-theta.vercel.app) (reads the chain directly, no wallet needed) · [LoanShield contract](https://explorer.arc.io/address/0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04) · [the live rescue](https://explorer.arc.io/tx/0x6a2633b3fe07f715a94da58e37e00fe903eb02ee986c9775a44fd0ea491cea3f) · [every transaction](#live-on-arc-mainnet)
+
 ## Status
 
 **Built** means the code exists and a test that runs it passes. **Planned** means it doesn't exist or hasn't run yet. Every claim, with the command that proves it, is in [CLAIMS.md](CLAIMS.md).
@@ -15,15 +17,15 @@ Arc's Borrow Kit lends USDC against cirBTC through Morpho Blue. When the loan's 
 | Part | Status |
 |---|---|
 | `LoanShield.sol` contract | **built**. 39 tests: unit, fuzz, invariant, and fork tests against the real Arc mainnet market |
-| Keeper (polling) and webhook receiver (`app/`) | **built**. 35 unit tests, plus end to end on a local fork of Arc mainnet |
+| Keeper (polling) and webhook receiver (`app/`) | **built**. Unit tested (the app suite is 45 tests: keeper, webhook, the chain reader and the site's display helpers), plus end to end on a local fork of Arc mainnet |
 | End-to-end run on a local fork (`scripts/e2e-local.sh`) | **built**. 21 checks: a real loan in the real cirBTC market, rescued by the keeper and by the webhook, each exactly once |
 | Circle Kit scripts: `buy-cirbtc` (Swap Kit), `open-loan` and `register-webhook` (Borrow Kit), and the Borrow Kit column of `status` | `buy-cirbtc` and `open-loan` **ran on Arc mainnet** on 2026-10-13 and opened the demo loan ([transactions](#live-on-arc-mainnet)), and the Borrow Kit column of `status` read it back. `register-webhook` is **built and typechecked, not run yet**. These scripts call Circle's live services, which a local fork can't provide |
-| Web page (`app/public/`) | **built**. Tested on a local fork, at desktop and phone width, in light and dark mode |
+| Web site (`app/web/`, React) | **built**. Six pages, dark and light themes. `npm run build` typechecks and builds it, and CI runs that too. The display helpers have 8 unit tests. Checked against Arc mainnet and a local fork, at desktop and phone width, in both themes |
 | CI (`.github/workflows/ci.yml`) | **passes** on GitHub Actions: contracts 39/39, app 35/35 and the end-to-end run, first green on 2026-10-12 (run 38317984750) |
 | Deployed on Arc mainnet | **deployed** 2026-10-13 at [`0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04`](https://explorer.arc.io/address/0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04). Its runtime code matches this repo's build byte for byte, apart from the two constructor addresses |
 | Source verified on explorer.arc.io | **planned** |
 | Live mainnet rescue | **done** 2026-10-13: the keeper's [`0x6a26…ea3f`](https://explorer.arc.io/tx/0x6a2633b3fe07f715a94da58e37e00fe903eb02ee986c9775a44fd0ea491cea3f) repaid 1.253229 USDC of the demo loan from its buffer, HF 1.236 → 1.800. Borrow Kit's `getLoans` agrees: HF 1.79999 (SAFE), liquidation price $46,552 |
-| Web page and webhook hosted on Vercel | **planned** |
+| Web site and webhook hosted on Vercel | **live** at [loan-shield-theta.vercel.app](https://loan-shield-theta.vercel.app) since 2026-10-13. A forged `LIQUIDATABLE` alert posted to the hosted [`/api/webhook`](https://loan-shield-theta.vercel.app/api/webhook) gets "healthy (HF 1.7999 ≥ trigger 1.3000), no rescue". It sends rescues once the keeper key is set on Vercel; until then it checks and reports |
 | Charging Borrow Kit's integrator fee | **planned, not built**. Needs a Circle API key |
 
 ## The guarantee
@@ -53,7 +55,7 @@ The contract computes health with Morpho's own formula, oracle and rounding, aft
  Keeper (app/), whose key holds only gas money
    scripts/keeper.ts          polls every watched loan every POLL_SECONDS (default 30)
    api/webhook.ts             Borrow Kit morpho.healthBandCrossed POST → re-check on-chain → same decision
- Web page (app/public/)       reads the chain over the public RPC: HF, buffer, policy, rescue history,
+ Web site (app/web/, React)   reads the chain over the public RPC: HF, buffer, policy, rescue history,
                               "would a rescue run now?" (eth_call). No wallet, no backend
 ```
 
@@ -104,8 +106,11 @@ You need [Arc Foundry](https://github.com/circlefin/arc-foundry) v0.8.0-2 (`arc-
 # Contracts: 39 tests. The fork tests read Arc mainnet at a pinned block through the public RPC.
 arc-forge test
 
-# App: typecheck and 35 unit tests (keeper, webhook, the web page's chain reader, ABI drift)
+# App: typecheck and 45 unit tests (keeper, webhook, the chain reader, the site's display helpers, ABI drift)
 cd app && npm ci && npm run typecheck && npm test
+
+# Web site: typecheck and production build into app/web/dist
+cd app/web && npm ci && npm run build
 
 # End to end, 21 checks. Forks Arc mainnet locally, opens a real loan in the real cirBTC market with throwaway
 # keys, deploys LoanShield, then runs the same protect / keeper / webhook / status code used on mainnet.
@@ -125,18 +130,20 @@ What the end-to-end run checks, in order:
 - Exactly three `Rescued` events are emitted. The web page's reader finds all three and decodes the loan.
 - Two read-only checks run against Arc mainnet itself.
 
-## Web page
+## Web site
 
-`app/public/index.html` is a single static page with no dependencies (`shield.js` is its chain reader). It shows the loan's live health factor against its trigger, target and liquidation point. It also shows the buffer, the policy, every rescue with links to explorer.arc.io, and whether a rescue would run right now. It gets that last answer from an `eth_call` of `rescue`, and it decodes the revert, such as `NotInDanger(health factor, trigger)`. The page has no wallet connection and makes no writes.
+`app/web/` is a React app (Vite and React Router) with six pages: `/` (overview), `/app` (live dashboard), `/how-it-works`, `/compare` (each competitor fact links its source), `/market` (live market figures and a loan planner) and `/developers`. It has dark and light themes and a 3D hero built with three.js, which loads lazily. Every chain read goes through `app/public/shield.js`, the dependency-free reader the tests check. Vite bundles it into the site and also serves it on its own at `/shield.js`.
 
-Which loan it shows comes from URL parameters: `?shield=0x…&borrower=0x…` (and optionally `&market=0x…`). The defaults are filled in after the mainnet deploy. To look at a loan on a local fork (for example one made by `e2e/setup-local-loan.ts` against `arc-anvil`), serve the folder and add `rpc`:
+The dashboard shows the loan's live health factor against its trigger, target and liquidation point. It also shows the buffer, the policy, every rescue with links to explorer.arc.io, and whether a rescue would run right now. It gets that last answer from an `eth_call` of `rescue`, and it decodes the revert, such as `NotInDanger(health factor, trigger)`. The site has no wallet connection and makes no writes. The photos of people are Unsplash stock, credited where they appear; they illustrate use cases and aren't customers.
+
+Which loan the dashboard shows comes from URL parameters: `?shield=0x…&borrower=0x…` (and optionally `&market=0x…`). The defaults are the live shield and the demo loan. To look at a loan on a local fork (for example one made by `e2e/setup-local-loan.ts` against `arc-anvil`), run the dev server and add `rpc`:
 
 ```sh
-python3 -m http.server -d app/public 8090
-# http://127.0.0.1:8090/?rpc=http://127.0.0.1:8547&shield=0x…&borrower=0x…
+cd app/web && npm ci && npm run dev
+# http://127.0.0.1:5173/app?rpc=http://127.0.0.1:8547&shield=0x…&borrower=0x…
 ```
 
-`?rpc=` accepts only `http://127.0.0.1:<port>` or `http://localhost:<port>`. Any other value is ignored, so a shared link can't point the page at someone else's node. In fork mode, the page shows a "LOCAL FORK" chip and prints fork-only addresses and transactions as plain text instead of explorer links.
+`?rpc=` accepts only `http://127.0.0.1:<port>` or `http://localhost:<port>`. Any other value is ignored, so a shared link can't point the page at someone else's node. In fork mode, the site shows a "Local fork" chip and prints fork-only addresses and transactions as plain text instead of explorer links.
 
 ## Webhook trust model
 
@@ -219,7 +226,8 @@ script/Deploy.s.sol             mainnet deploy (refuses any chain but 5042)
 app/src/                        shared TypeScript: config, viem chain client, keeper decision, webhook handler
 app/scripts/                    operator CLIs: buy-cirbtc, open-loan, protect, status, register-webhook, keeper
 app/api/webhook.ts              Vercel function for Borrow Kit notifications
-app/public/                     the web page and its dependency-free chain reader
+app/web/                        the React site: pages, components and display helpers
+app/public/                     the dependency-free chain reader (shield.js), also served at /shield.js
 app/e2e/                        local-fork helpers and the read-only mainnet check
 scripts/e2e-local.sh            the end-to-end run
 scripts/verify-submission.sh    pre-submission checks (repo, claims, secrets, live deployment)

@@ -38,7 +38,7 @@ else
 fi
 
 echo "Claims backed by code (mentioned in docs -> code must exist)"
-code_paths="src script app/src app/scripts app/api app/public"
+code_paths="src script app/src app/scripts app/api app/public app/web/src"
 claim() { # name, regex
   docs=$(grep -liE "$2" ./*.md 2>/dev/null | wc -l | tr -d ' ')
   code=$(grep -rliE "$2" $code_paths 2>/dev/null | wc -l | tr -d ' ')
@@ -71,8 +71,8 @@ echo "Live on Arc mainnet (read-only)"
 rpc() { curl -s -m 20 -H 'content-type: application/json' -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}" "$RPC" | jq -r '.result // empty'; }
 [ "$(rpc eth_chainId '[]')" = 0x13b2 ] && ok "$RPC is chain 5042" || bad "$RPC did not answer chain id 5042"
 shield=$(grep -E '^\| LoanShield \|' README.md | grep -oE '0x[0-9a-fA-F]{40}' | head -1)
-page_shield=$(sed -nE 's/.*const DEFAULTS = \{ shield: "([^"]*)", borrower: "([^"]*)".*/\1/p' app/public/index.html)
-page_borrower=$(sed -nE 's/.*const DEFAULTS = \{ shield: "([^"]*)", borrower: "([^"]*)".*/\2/p' app/public/index.html)
+page_shield=$(sed -nE 's/.*const DEFAULTS = \{ shield: "([^"]*)", borrower: "([^"]*)".*/\1/p' app/web/src/config.ts)
+page_borrower=$(sed -nE 's/.*const DEFAULTS = \{ shield: "([^"]*)", borrower: "([^"]*)".*/\2/p' app/web/src/config.ts)
 if [ -z "$shield" ]; then
   bad "no LoanShield address in the README's Addresses table"
 else

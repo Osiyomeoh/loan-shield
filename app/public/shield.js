@@ -225,6 +225,41 @@ export async function readLoan(rpc, { shield, borrower, market }, m) {
 }
 
 /**
+ * USDC a rescue repays to lift a loan from health factor `hf` to `target` at a fixed price: HF is proportional to
+ * 1 / debt, so it is debt × (1 − hf / target), rounded up. The contract does the same in shares with Morpho's
+ * rounding (LoanShield._plan), so this can differ from its `preview` by a few base units.
+ * @param {bigint} debt @param {bigint} hf @param {bigint} target
+ */
+export function repayToTarget(debt, hf, target) {
+  if (hf >= target) return 0n;
+  return (debt * (target - hf) + target - 1n) / target;
+}
+
+/**
+ * Where a protected loan stands in collateral-price terms, for the page's "how far can BTC fall" view. HF is
+ * proportional to the collateral price, so each threshold is today's price × (HF at the threshold) / HF now.
+ * It assumes only the price moves: no interest, no top-up or withdrawal, and each rescue lands before a liquidator.
+ * @param {{ debt: bigint, buffer: bigint, healthFactor: bigint, trigger: bigint, target: bigint }} loan
+ * @param {number} price collateral price now, in loan tokens (collateralPrice)
+ */
+export function outlook({ debt, buffer, healthFactor, trigger, target }, price) {
+  if (debt === 0n || healthFactor === 0n || healthFactor === MAX_UINT256) return undefined;
+  const liquidationPrice = (price * 1e18) / Number(healthFactor);
+  if (trigger === 0n) {
+    return { liquidationPrice, protectedPrice: liquidationPrice, rescuePrice: undefined, needed: 0n, nextRepay: 0n, nextHealthAfter: undefined };
+  }
+  // Rescues keep repaying from the buffer as the price falls, so once it is spent the loan carries debt − buffer,
+  // and liquidation moves down in proportion.
+  const debtLeft = buffer >= debt ? 0n : debt - buffer;
+  const protectedPrice = (liquidationPrice * Number(debtLeft)) / Number(debt);
+  // The first rescue, once the price reaches the trigger: capped by the buffer, like the contract's.
+  const needed = repayToTarget(debt, trigger, target);
+  const nextRepay = needed < buffer ? needed : buffer;
+  const nextHealthAfter = nextRepay >= debt ? MAX_UINT256 : (trigger * debt) / (debt - nextRepay);
+  return { liquidationPrice, protectedPrice, rescuePrice: (price * Number(trigger)) / Number(healthFactor), needed, nextRepay, nextHealthAfter };
+}
+
+/**
  * Runs `rescue` as an eth_call: what would happen if anyone sent it now. Nothing is sent.
  * @param {Rpc} rpc
  * @param {{ shield: string, borrower: string, market: string }} loan
