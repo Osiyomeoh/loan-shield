@@ -366,7 +366,7 @@ p {
   width: 30px;
   height: 30px;
   display: grid;
-  filter: drop-shadow(0 6px 14px color-mix(in srgb, var(--accent) 45%, transparent));
+  filter: drop-shadow(0 6px 16px color-mix(in srgb, var(--accent) 32%, transparent));
 }
 .nav-links {
   display: flex;

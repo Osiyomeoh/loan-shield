@@ -130,7 +130,7 @@ export default function HowItWorks() {
     { part: "Live mainnet rescue", detail: "2026-10-13: repaid 1.253229 USDC from the buffer, HF 1.236 → 1.800", status: "done", tone: "good" },
     { part: "Keeper and webhook receiver", detail: "Unit tested, and run end to end on a local fork of Arc mainnet", status: "built", tone: "good" },
     webhook,
-    { part: "register-webhook script (Borrow Kit)", detail: "Typechecked, not run yet", status: "built", tone: "warn" },
+    { part: "register-webhook script (Borrow Kit)", detail: "Ran on Arc mainnet 2026-10-13: the demo loan's health-band alerts go to the hosted webhook", status: "done", tone: "good" },
     { part: "Source verified on explorer.arc.io", detail: "Not done yet", status: "planned", tone: "" },
     { part: "Turning protection on in the browser", detail: "Use npm run protect for now", status: "planned", tone: "" },
     { part: "Watch list kept in storage, for many users", detail: "A webhook wakes one deployment's keeper for the loans in its WATCH list", status: "planned", tone: "" },
