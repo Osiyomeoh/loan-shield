@@ -133,8 +133,8 @@
 <script type="module">
   import * as web from "./shield.js";
 
-  // Filled in after the mainnet deploy. URL parameters ?shield=…&borrower=…&market=… override these.
-  const DEFAULTS = { shield: "", borrower: "", market: web.CIRBTC_MARKET };
+  // The live deployment and the demo loan (README, "Live on Arc mainnet"). URL parameters ?shield=…&borrower=…&market=… override these.
+  const DEFAULTS = { shield: "0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04", borrower: "0xf5C4c6528d214eaddf0e7e5e64D07Ab7dC321920", market: web.CIRBTC_MARKET };
   const REPO = "https://github.com/Osiyomeoh/loan-shield";
 
   const params = new URLSearchParams(location.search);

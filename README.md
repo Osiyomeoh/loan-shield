@@ -17,11 +17,12 @@ Arc's Borrow Kit lends USDC against cirBTC through Morpho Blue. When the loan's 
 | `LoanShield.sol` contract | **built**. 39 tests: unit, fuzz, invariant, and fork tests against the real Arc mainnet market |
 | Keeper (polling) and webhook receiver (`app/`) | **built**. 35 unit tests, plus end to end on a local fork of Arc mainnet |
 | End-to-end run on a local fork (`scripts/e2e-local.sh`) | **built**. 21 checks: a real loan in the real cirBTC market, rescued by the keeper and by the webhook, each exactly once |
-| Circle Kit scripts: `buy-cirbtc` (Swap Kit), `open-loan` and `register-webhook` (Borrow Kit), and the Borrow Kit column of `status` | **built and typechecked, not run yet**. They call Circle's live services, which a local fork can't provide, so they first run when the demo loan is opened on mainnet |
+| Circle Kit scripts: `buy-cirbtc` (Swap Kit), `open-loan` and `register-webhook` (Borrow Kit), and the Borrow Kit column of `status` | `buy-cirbtc` and `open-loan` **ran on Arc mainnet** on 2026-10-13 and opened the demo loan ([transactions](#live-on-arc-mainnet)), and the Borrow Kit column of `status` read it back. `register-webhook` is **built and typechecked, not run yet**. These scripts call Circle's live services, which a local fork can't provide |
 | Web page (`app/public/`) | **built**. Tested on a local fork, at desktop and phone width, in light and dark mode |
 | CI (`.github/workflows/ci.yml`) | **passes** on GitHub Actions: contracts 39/39, app 35/35 and the end-to-end run, first green on 2026-10-12 (run 38317984750) |
-| Deployed on Arc mainnet, verified on explorer.arc.io | **planned**. The address goes here once it is deployed |
-| Live mainnet rescue (transaction links) | **planned** |
+| Deployed on Arc mainnet | **deployed** 2026-10-13 at [`0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04`](https://explorer.arc.io/address/0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04). Its runtime code matches this repo's build byte for byte, apart from the two constructor addresses |
+| Source verified on explorer.arc.io | **planned** |
+| Live mainnet rescue | **done** 2026-10-13: the keeper's [`0x6a26…ea3f`](https://explorer.arc.io/tx/0x6a2633b3fe07f715a94da58e37e00fe903eb02ee986c9775a44fd0ea491cea3f) repaid 1.253229 USDC of the demo loan from its buffer, HF 1.236 → 1.800. Borrow Kit's `getLoans` agrees: HF 1.79999 (SAFE), liquidation price $46,552 |
 | Web page and webhook hosted on Vercel | **planned** |
 | Charging Borrow Kit's integrator fee | **planned, not built**. Needs a Circle API key |
 
@@ -67,13 +68,33 @@ Design choices:
 
 | What | Address |
 |---|---|
-| LoanShield | _not deployed yet_ |
+| LoanShield | [`0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04`](https://explorer.arc.io/address/0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04), deployed in block 25,712,043 |
+| Demo borrower (Borrow Kit loan `ac7209cf-003e-57f3-8f0a-2e100afb2225`) | [`0xf5C4c6528d214eaddf0e7e5e64D07Ab7dC321920`](https://explorer.arc.io/address/0xf5C4c6528d214eaddf0e7e5e64D07Ab7dC321920) |
 | Morpho Blue | [`0x34CD04070dD72b14E241112F6d83812Df5Af7fCD`](https://explorer.arc.io/address/0x34CD04070dD72b14E241112F6d83812Df5Af7fCD) |
 | USDC/cirBTC market (LLTV 0.86), which Borrow Kit lends from | `0xc2db905f174e5defcce01d321b09f15f78856a36a21b90cc7e1abbc29225815d` |
 | USDC (ERC-20 interface, 6 decimals) | [`0x3600000000000000000000000000000000000000`](https://explorer.arc.io/address/0x3600000000000000000000000000000000000000) |
 | cirBTC (8 decimals) | [`0x171A4217b86A807A64eB94757Db6849fb4bDbAA0`](https://explorer.arc.io/address/0x171A4217b86A807A64eB94757Db6849fb4bDbAA0) |
 
 RPC `https://rpc.mainnet.arc.io`, explorer `https://explorer.arc.io`. On 2026-10-12 (block 25,639,106), the market had 194,023,879 USDC borrowed against cirBTC (`npx tsx e2e/mainnet-read.ts`).
+
+## Live on Arc mainnet
+
+The demo loan, opened with the operator steps below from a wallet funded with 10 USDC. Gas was paid in USDC at 20 gwei.
+
+| Step | Transaction | Gas |
+|---|---|---|
+| Swap Kit: 6.5 USDC → 0.00007768 cirBTC | [`0x734f…3cc1`](https://explorer.arc.io/tx/0x734fa6857cd0d63fb447c3eb1e462f5e55289acf24103f807611478ed0e23cc1), block 25,711,514 | 545,910 (0.0109 USDC) |
+| Borrow Kit: borrow 4 USDC against 0.00006861 cirBTC; the loan starts at health factor 1.236 | [`0xe8a0…9767`](https://explorer.arc.io/tx/0xe8a03c02890895fed0c8af45ebab580a9f556228a6e292ced13462a8fdf39767), block 25,711,528 | 345,235 (0.0069 USDC) |
+| Deploy LoanShield | [`0x2806…157a`](https://explorer.arc.io/tx/0x28067ef351f87fa56d1c13581a058c081afd9f4daadda895c71256d09d0c157a), block 25,712,043 | 2,149,816 (0.0430 USDC) |
+| `protect -- 2 1.1 1.5`: approve exactly 2 USDC | [`0x570c…b1eb`](https://explorer.arc.io/tx/0x570c570dc5008e47fba992fdc81624190c7e1573c9538c6fa744736a41ecb1eb), block 25,714,343 | 55,438 (0.0011 USDC) |
+| deposit 2 USDC into the buffer | [`0x614e…dab9`](https://explorer.arc.io/tx/0x614e42b37b22e6e9b3e01e0cbc43dc2008e40e1b19a32197472564b2ff7bdab9), block 25,714,345 | 75,012 (0.0015 USDC) |
+| `setPolicy`: rescue below 1.1, back up to 1.5. The loan is at 1.236, so `rescue` reverts `NotInDanger(1.236, 1.1)` | [`0x94cc…ae1c`](https://explorer.arc.io/tx/0x94cce1e0004d47a92d718695b30ad501d48dd2addafbca2784bbf314d556ae1c), block 25,714,348 | 61,305 (0.0012 USDC) |
+| `protect -- 0 1.3 1.8`: raise the trigger above the loan's 1.236 to put it in danger now, without waiting for BTC to fall. `preview` then returns Ready: repay 1.253229 USDC, HF → 1.8 | [`0x0850…9b4a`](https://explorer.arc.io/tx/0x0850c55112afcc0e1a1ecf5d2d0f30ea1b2fea7cfb574a62c298fa9444319b4a), block 25,715,440 | 44,205 (0.0009 USDC) |
+| **Keeper rescue** (`npm run keeper -- --once`, sent by the separate keeper wallet `0xEa25…6648`): `Rescued` repaid 1.253229 USDC (1,251,831,840,608 shares) from the buffer, HF 1.236 → 1.800. A second `rescue` now reverts `NotInDanger(1.7999…, 1.3)` | [`0x6a26…ea3f`](https://explorer.arc.io/tx/0x6a2633b3fe07f715a94da58e37e00fe903eb02ee986c9775a44fd0ea491cea3f), block 25,715,475 | 178,980 (0.0036 USDC, paid by the keeper) |
+
+After the rescue, `npm run status` shows the loan through Morpho, the shield and Borrow Kit side by side. Borrow Kit's own `getLoans` reports health factor 1.7999997 (SAFE), 2.746781 USDC borrowed and a liquidation price of $46,552, down from about $67,790 before the rescue. The buffer holds the remaining 0.746771 USDC.
+
+Borrow Kit's borrow transaction authorizes its adapter on Morpho and revokes it in the same transaction (both `SetAuthorization` events are in its logs), so nothing keeps a standing permission over the position.
 
 ## Reproduce
 
@@ -147,24 +168,32 @@ These are things about Arc that surfaced while building, each reproduced by a te
 
 These steps are for the borrower and keeper operator. They send real transactions with your own keys, which go only in your own `app/.env` (gitignored, see `app/.env.example`). Every script prints a plan and sends nothing until you add `--yes`, so run each one without `--yes` first to see Circle's quote: the fees, the collateral Borrow Kit would take and the health factor the loan would start at. Use a fresh wallet that holds only what the demo needs.
 
-The amounts below fit a 10 USDC wallet: 8.5 USDC buys the cirBTC collateral, about 0.5 stays for gas (the deploy is ≈ 0.043, every other transaction well under 0.01) and 0.1 goes to the keeper wallet. The 4 USDC borrowed lands in the wallet and pays for the 1.5 USDC buffer. Borrow Kit sizes the collateral itself, so if its quote wants more cirBTC than the wallet holds, borrow less.
+These are the amounts the demo used, from a 10 USDC wallet. 6.5 USDC bought the cirBTC. For a 4 USDC loan, Borrow Kit took 0.00006861 cirBTC as collateral, which put the loan at health factor 1.236. The deploy cost 0.043 USDC; every other transaction costs well under 0.01. The 4 USDC borrowed lands in the wallet and pays for the 2 USDC buffer, and 0.1 USDC goes to the keeper wallet. Borrow Kit sizes the collateral itself, so if its quote wants more cirBTC than the wallet holds, borrow less.
 
 ```sh
-cd app && cp .env.example .env    # then fill in PRIVATE_KEY (borrower) yourself
-npm run buy-cirbtc -- 8.5 --yes   # Swap Kit: USDC → cirBTC
-npm run open-loan -- 4 --yes      # Borrow Kit: borrow USDC against cirBTC
+# Fill in PRIVATE_KEY (the borrower's key) in app/.env yourself
+cd app && cp .env.example .env
+# Swap Kit: USDC → cirBTC
+npm run buy-cirbtc -- 6.5 --yes
+# Borrow Kit: borrow USDC against cirBTC
+npm run open-loan -- 4 --yes
 
-# Deploy from the repo root with your own keystore account (arc-cast wallet import <name> --interactive)
-arc-forge script script/Deploy.s.sol --rpc-url arc --account <name> --broadcast
+# Deploy from the repo root with your own keystore account (arc-cast wallet import <name> --interactive),
 # then set SHIELD_ADDRESS in app/.env
+arc-forge script script/Deploy.s.sol --rpc-url arc --account <name> --broadcast
 
-npm run protect -- 1.5 1.5 1.8 --yes                     # deposit 1.5 USDC; rescue below 1.5, back up to 1.8
-npm run status -- <borrower>                              # Morpho, Borrow Kit and the shield, side by side
+# Deposit 2 USDC; rescue below 1.1, back up to 1.5
+npm run protect -- 2 1.1 1.5 --yes
+# Morpho, Borrow Kit and the shield, side by side
+npm run status -- <borrower>
 npm run register-webhook -- https://<host>/api/webhook --yes
-npm run keeper                                            # WATCH=<borrower>:<market id>, KEEPER_PRIVATE_KEY
+# Needs WATCH=<borrower>:<market id> and KEEPER_PRIVATE_KEY in app/.env
+npm run keeper
 ```
 
-**A live rescue without waiting for BTC to fall.** The contract accepts any trigger above 1, so raise it just above the loan's current health factor with `npm run protect -- 0 1.9 2.2 --yes` (a buffer of 0 only updates the policy). The keeper's next pass rescues the loan. It repays 1 − HF/target of the debt from the buffer: at HF 1.8 that is 1 − 1.8/2.2 ≈ 18%, about 0.73 USDC of a 4 USDC loan. Borrow Kit picks the loan's starting health factor, so take the trigger and target from what `status` shows.
+Each comment sits on its own line because zsh, macOS's default shell, doesn't treat `#` as a comment at an interactive prompt unless `interactive_comments` is set, so `npm run protect -- 2 1.1 1.5 # note` passes `#` to the script as the market id.
+
+**A live rescue without waiting for BTC to fall.** The contract accepts any trigger above 1, so raise it just above the loan's current health factor with `npm run protect -- 0 1.3 1.8 --yes` (a buffer of 0 only updates the policy). The keeper's next pass rescues the loan. It repays 1 − HF/target of the debt from the buffer: at HF 1.236 that is 1 − 1.236/1.8 ≈ 31%, about 1.25 USDC of a 4 USDC loan. Borrow Kit picks the loan's starting health factor, so take the trigger and target from what `status` shows.
 
 `KEEPER_PRIVATE_KEY` should be a separate wallet that holds a few cents of USDC for gas: 0.1 USDC pays for more than 25 rescues at ≈ 0.0036 each. It can only call `rescue`, which repays loans from their owners' own buffers.
 
