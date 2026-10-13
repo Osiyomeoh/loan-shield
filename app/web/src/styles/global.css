@@ -1921,6 +1921,9 @@ details[open] > summary::after {
   overflow: hidden;
   border: 1px solid var(--border);
 }
+.stats.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .stats > div {
   background: var(--surface-solid);
   padding: 22px;
@@ -2754,6 +2757,25 @@ a.wallet-btn.wrong .dot {
   }
 }
 
+.keeper-alerts {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.keeper-alerts .result {
+  margin-top: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.keeper-alerts .result svg {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  color: var(--good);
+  flex: none;
+}
+
 details.advanced > summary {
   cursor: pointer;
   list-style: none;
@@ -2872,7 +2894,8 @@ details.advanced > summary::after {
   .section-head {
     margin-bottom: 36px;
   }
-  .stats {
+  .stats,
+  .stats.four {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .addr {

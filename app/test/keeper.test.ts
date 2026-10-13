@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatWad, parseWatchList } from "../src/config.js";
+import { CIRBTC_MARKET, formatWad, parseMarketList, parseWatchList } from "../src/config.js";
 import { checkAndRescue, describe } from "../src/keeper.js";
 import { ADA, FakeChain, healthy, inDanger, TUNDE } from "./fakes.js";
 
@@ -53,6 +53,20 @@ test("a rescue that reverts on-chain is reported, not hidden", async () => {
   assert.match(describe(TUNDE, outcome), /reverted on-chain/);
 });
 
+test("minRepay skips a rescue repaying less, and sends one repaying exactly that much", async () => {
+  const small = new FakeChain({ [TUNDE.borrower]: { ...inDanger, repayAssets: 9_999n } });
+  const outcome = await checkAndRescue(small, TUNDE, { send: true, minRepay: 10_000n });
+  assert.equal(outcome.kind, "too-small");
+  assert.equal(small.sent.length, 0);
+  const exact = new FakeChain({ [TUNDE.borrower]: { ...inDanger, repayAssets: 10_000n } });
+  assert.equal((await checkAndRescue(exact, TUNDE, { send: true, minRepay: 10_000n })).kind, "rescued");
+});
+
+test("minRepay applies before the no-key report, so a dust rescue isn't reported as due", async () => {
+  const chain = new FakeChain({ [TUNDE.borrower]: { ...inDanger, repayAssets: 1n } });
+  assert.equal((await checkAndRescue(chain, TUNDE, { send: false, minRepay: 10_000n })).kind, "too-small");
+});
+
 test("RPC errors propagate instead of being treated as 'healthy'", async () => {
   const chain = new FakeChain();
   chain.failPreview = true;
@@ -69,6 +83,14 @@ test("parseWatchList rejects malformed entries", () => {
   assert.throws(() => parseWatchList(TUNDE.borrower), /borrower:marketId/);
   assert.throws(() => parseWatchList(`0x1234:${TUNDE.marketId}`), /not an address/);
   assert.throws(() => parseWatchList(`${TUNDE.borrower}:0x1234`), /32-byte hex id/);
+});
+
+test("parseMarketList defaults to the cirBTC market, accepts a list and 'none'", () => {
+  assert.deepEqual(parseMarketList(undefined), [CIRBTC_MARKET]);
+  assert.deepEqual(parseMarketList("  "), [CIRBTC_MARKET]);
+  assert.deepEqual(parseMarketList("none"), []);
+  assert.deepEqual(parseMarketList(`${CIRBTC_MARKET.toUpperCase().replace("0X", "0x")}, ${CIRBTC_MARKET}`), [CIRBTC_MARKET]);
+  assert.throws(() => parseMarketList("0x1234"), /32-byte hex id/);
 });
 
 test("formatWad", () => {

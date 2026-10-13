@@ -14,8 +14,9 @@ import { loanShieldAbi } from "./abi.js";
 import { arc, rpcUrl, STATUS, type Position } from "./config.js";
 import type { Preview, ShieldChain } from "./keeper.js";
 
+/** Retries rate-limited (429) and failed requests a few more times than viem's default 3, with backoff. */
 export function publicClient(rpc = rpcUrl()): PublicClient {
-  return createPublicClient({ chain: arc, transport: http(rpc) });
+  return createPublicClient({ chain: arc, transport: http(rpc, { retryCount: 5 }) });
 }
 
 export function walletClient(account: PrivateKeyAccount, rpc = rpcUrl()): WalletClient {

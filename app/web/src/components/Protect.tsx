@@ -2,12 +2,13 @@
 // a transaction the owner's wallet signs; the form only builds it and shows what it would do.
 import { AnimatePresence, motion } from "motion/react";
 import { useId, useMemo, useState, type ReactNode } from "react";
-import { REPO, web } from "../config";
-import { hfText, usdc } from "../lib/format";
+import { DEFAULTS, KEEPER_WEBHOOK, onFork, REPO, web } from "../config";
+import { hfText, short, usdc } from "../lib/format";
 import type { Funds, Loan } from "../lib/live";
 import { PRESETS, protectPreview, spendable, suggestedTopUp, type LoanState, type PlanRow } from "../lib/view";
+import { signTypedData, walletError } from "../lib/wallet";
 import { CodeBlock } from "./Copy";
-import { IconArrow } from "./Icons";
+import { IconArrow, IconCheck } from "./Icons";
 import { Ext } from "./Links";
 import { TxSteps, type Step } from "./TxSteps";
 
@@ -377,27 +378,151 @@ export function ManagePanel({ owner }: { owner: Owner }) {
   );
 }
 
-/** Who sends the rescue for this loan. Honest about what the hosted keeper covers today. */
-export function WhoWatches({ loan, demo }: { loan: Loan; demo: boolean }) {
+/** Whether this site's hosted keeper (app/api/webhook.ts and the 5-minute sweep) watches loans on `loan.shield`. */
+const hostedKeeper = (loan: Loan) => !onFork && loan.shield.toLowerCase() === DEFAULTS.shield.toLowerCase();
+
+type AlertsPhase =
+  | { at: "idle" | "finding" | "signing" | "sending" | "none" }
+  | { at: "done"; when: number; fresh: boolean }
+  | { at: "failed"; error: string };
+
+// Borrow Kit has no endpoint that reads a loan's alert address back, so the page remembers what it sent from this
+// browser. Storage can be blocked (private windows); the page then just offers the button again.
+const alertsKey = (loan: Loan, account: string) => `loan-shield:alerts:${loan.shield}:${account}:${loan.market}`.toLowerCase();
+const sentAlerts = {
+  get(key: string): number | undefined {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) ?? "null");
+      return saved?.webhookUrl === KEEPER_WEBHOOK && typeof saved.at === "number" ? saved.at : undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  set(key: string, loanId: string) {
+    try {
+      localStorage.setItem(key, JSON.stringify({ loanId, webhookUrl: KEEPER_WEBHOOK, at: Date.now() }));
+    } catch {
+      // Not remembered; Borrow Kit has it either way.
+    }
+  },
+};
+const circleFetch: typeof fetch = (input, init) => fetch(input, init);
+const dateText = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+/**
+ * Points the owner's Borrow Kit health-band alerts at the hosted keeper's webhook: one EIP-712 signature, checked by
+ * Circle, and no transaction. Kept apart from the transaction steps, so a Borrow Kit outage can't affect protection.
+ */
+function KeeperAlerts({ loan, account, hosted }: { loan: Loan; account: string; hosted: boolean }) {
+  const key = alertsKey(loan, account);
+  const [phase, setPhase] = useState<AlertsPhase>(() => {
+    const when = sentAlerts.get(key);
+    return when ? { at: "done", when, fresh: false } : { at: "idle" };
+  });
+  const busy = phase.at === "finding" || phase.at === "signing" || phase.at === "sending";
+
+  async function send() {
+    try {
+      setPhase({ at: "finding" });
+      const found = await web.findBorrowKitLoan(circleFetch, account, loan.market);
+      if (!found) return setPhase({ at: "none" });
+      // Borrow Kit refuses a deadline more than 300 s away; the signature is good for 4 minutes.
+      const deadline = Math.floor(Date.now() / 1000) + web.WEBHOOK_DEADLINE_SECONDS;
+      const typed = web.webhookRegistration({ loanId: found.loanId, owner: account, webhookUrl: KEEPER_WEBHOOK, deadline });
+      setPhase({ at: "signing" });
+      const signature = await signTypedData(typed);
+      setPhase({ at: "sending" });
+      await web.postWebhookRegistration(circleFetch, { loanId: found.loanId, webhookUrl: KEEPER_WEBHOOK, deadline, signature });
+      sentAlerts.set(key, found.loanId);
+      setPhase({ at: "done", when: Date.now(), fresh: true });
+    } catch (err) {
+      setPhase({ at: "failed", error: walletError(err) });
+    }
+  }
+
+  const button = (label: string, ghost = false) => (
+    <button type="button" className={`btn sm ${ghost ? "ghost" : "primary"}`} onClick={send} disabled={busy}>
+      {label}
+    </button>
+  );
+  return (
+    <div className="keeper-alerts">
+      <p className="small">
+        <b>Wake it sooner.</b> Borrow Kit can alert a web address each time your loan crosses a health band (SAFE, WARN, URGENT, IMMINENT,
+        LIQUIDATABLE). Send those alerts to this keeper and it checks your loan as soon as one arrives{hosted ? ", without waiting for its next pass" : ""}. It's
+        one signature in your wallet: no transaction, no gas. Borrow Kit keeps one alert address per loan, so this replaces any you set before.
+      </p>
+      <div style={{ marginTop: 12 }} aria-live="polite">
+        {phase.at === "idle" && button("Send alerts to the keeper")}
+        {busy && (
+          <p className="small muted">
+            {phase.at === "finding" ? "Finding your Borrow Kit loan…" : phase.at === "signing" ? "Sign the message in your wallet. It costs no gas." : "Sending it to Borrow Kit…"}
+          </p>
+        )}
+        {phase.at === "none" && (
+          <p className="result warn">
+            Borrow Kit has no open loan for this wallet in this market, so it has no alerts to send (a loan opened on Morpho directly has none).
+            {hosted ? " The keeper's 5-minute check still covers your loan." : ""}
+          </p>
+        )}
+        {phase.at === "done" && (
+          <>
+            <p className="result good" role="status">
+              <IconCheck /> <span>{phase.fresh ? "Borrow Kit confirmed it: this loan's alerts now go to the keeper." : `You sent this loan's alerts to the keeper from this browser on ${dateText(phase.when)}.`}</span>
+            </p>
+            <div style={{ marginTop: 10 }}>{button("Send them again", true)}</div>
+          </>
+        )}
+        {phase.at === "failed" && (
+          <>
+            <p className="result bad">Not sent: {phase.error}</p>
+            <div style={{ marginTop: 10 }}>{button("Try again")}</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Who sends the rescue for this loan: what the hosted keeper covers, and how to run another keeper. */
+export function WhoWatches({ loan, account }: { loan: Loan; account: string }) {
+  const hosted = hostedKeeper(loan);
+  const keeperCommand = (
+    <CodeBlock label="in loan-shield/app, with KEEPER_PRIVATE_KEY in .env" code={`SHIELD_ADDRESS=${loan.shield} WATCH=${loan.borrower}:${loan.market} npm run keeper`} />
+  );
+  const keeperNote = (
+    <p className="small muted" style={{ marginTop: 10 }}>
+      It checks every 30 seconds and sends only when the contract's <code>preview</code> says Ready.{" "}
+      <Ext href={`${REPO}#run-it-on-mainnet-operator-steps`}>Setup steps</Ext>
+    </p>
+  );
   return (
     <section className="card">
       <div className="card-head">
         <h3>Who sends the rescue</h3>
-        <span className={`pill ${demo ? "good" : "warn"}`}>{demo ? "Hosted keeper" : "Run a keeper"}</span>
+        <span className={`pill ${hosted ? "good" : "warn"}`}>{hosted ? "Hosted keeper" : onFork ? "Local fork" : "Run a keeper"}</span>
       </div>
       <p className="small">
         Anyone can: <code>rescue</code> needs no permission, and it can only repay your own loan from your own buffer.{" "}
-        {demo
-          ? "This site's hosted keeper watches this loan and sends the rescue when the contract says one is due."
-          : "This site's hosted keeper only watches the demo loan for now; a shared watch list for every user is planned. To have yours watched today, run the repo's keeper with a gas-only key:"}
+        {hosted
+          ? "This site's keeper finds every loan with protection on from the contract's own events and checks each one about every 5 minutes (on GitHub's scheduler, which can start late). When the contract says a rescue is due, the keeper sends it and pays the gas. It skips rescues under 0.01 USDC; anyone else can still send those."
+          : onFork
+            ? "No hosted keeper watches a local fork: run the repo's keeper against it. The alert button below talks to Borrow Kit just as it does on mainnet."
+            : `This site's keeper watches the Loan Shield contract at ${short(DEFAULTS.shield)} only. To have this loan watched, run the repo's keeper with a gas-only key:`}
       </p>
-      {!demo && (
+      {(hosted || onFork) && loan.market.toLowerCase() === web.CIRBTC_MARKET.toLowerCase() && <KeeperAlerts loan={loan} account={account} hosted={hosted} />}
+      {hosted || onFork ? (
+        <details className="advanced" style={{ marginTop: 16 }}>
+          <summary>Run your own keeper too</summary>
+          <div style={{ marginTop: 12 }}>
+            {keeperCommand}
+            {keeperNote}
+          </div>
+        </details>
+      ) : (
         <div style={{ marginTop: 14 }}>
-          <CodeBlock label="in loan-shield/app, with KEEPER_PRIVATE_KEY in .env" code={`SHIELD_ADDRESS=${loan.shield} WATCH=${loan.borrower}:${loan.market} npm run keeper`} />
-          <p className="small muted" style={{ marginTop: 10 }}>
-            It checks every 30 seconds and sends only when the contract's <code>preview</code> says Ready.{" "}
-            <Ext href={`${REPO}#run-it-on-mainnet-operator-steps`}>Setup steps</Ext>
-          </p>
+          {keeperCommand}
+          {keeperNote}
         </div>
       )}
     </section>

@@ -15,7 +15,8 @@
     "open-loan": "tsx --env-file=.env scripts/open-loan.ts",
     "protect": "tsx --env-file=.env scripts/protect.ts",
     "register-webhook": "tsx --env-file=.env scripts/register-webhook.ts",
-    "keeper": "tsx --env-file=.env scripts/keeper.ts"
+    "keeper": "tsx --env-file=.env scripts/keeper.ts",
+    "sweep": "tsx --env-file-if-exists=.env scripts/sweep.ts"
   },
   "dependencies": {
     "@circle-fin/adapter-viem-v2": "1.19.0",

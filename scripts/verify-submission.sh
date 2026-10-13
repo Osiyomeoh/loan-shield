@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Checks the submission the way a judge would see it: public repo with what's local pushed, every doc claim backed by
-# code, no secrets, the contract live on Arc mainnet and matching the README, and the hosted page and webhook up.
+# code, no secrets, the contract live on Arc mainnet and matching the README, the hosted page, webhook and stats up,
+# and the hosted keeper's sweep scheduled.
 # Read-only: it sends no transactions and needs no keys. Needs gh, jq, curl, Node (app/ installed) and arc-cast.
 # Usage: PAGE_URL=https://<vercel host> scripts/verify-submission.sh [video/social url ...]
 #   each extra url must return 200 and should be linked from the README.
@@ -95,7 +96,7 @@ else
   bad "web page DEFAULTS.borrower is empty"
 fi
 
-echo "Hosted page and webhook"
+echo "Hosted page, webhook and stats"
 if [ -z "${PAGE_URL:-}" ]; then
   soft "PAGE_URL not set: hosted page and webhook not checked"
 else
@@ -106,8 +107,24 @@ else
   [ "$c" = 200 ] && ok "shield.js served" || bad "$page/shield.js returned $c"
   hook=$(curl -s -m 20 "$page/api/webhook")
   [ "$(jq -r '.ok // empty' <<<"$hook" 2>/dev/null)" = true ] && ok "webhook answers: $hook" || bad "$page/api/webhook answered: ${hook:0:120}"
+  [ "$(jq -r '.alertWallets // empty' <<<"$hook" 2>/dev/null)" = true ] && ok "webhook checks the wallet an alert names" \
+    || bad "webhook doesn't check alert wallets (deployed before the hosted keeper?)"
+  stats=$(curl -s -m 60 "$page/api/stats")
+  stats_shield=$(jq -r '.shield // empty' <<<"$stats" 2>/dev/null | tr 'A-F' 'a-f')
+  [ "$(jq -r '.ok // empty' <<<"$stats" 2>/dev/null)" = true ] && [ "$stats_shield" = "$(tr 'A-F' 'a-f' <<<"${shield:-}")" ] \
+    && ok "stats: ${stats:0:200}" || bad "$page/api/stats answered: ${stats:0:120}"
   grep -qF "$page" README.md && ok "page linked from README" || bad "page not linked from README"
 fi
+
+echo "Hosted keeper sweep (.github/workflows/keeper.yml)"
+gh secret list -R "$REPO" 2>/dev/null | grep -q '^KEEPER_PRIVATE_KEY' && ok "KEEPER_PRIVATE_KEY secret set (name only)" \
+  || bad "no KEEPER_PRIVATE_KEY repository secret: the sweep only reports"
+run=$(gh run list -R "$REPO" --workflow keeper.yml --event schedule --limit 1 --json conclusion,createdAt,databaseId 2>/dev/null)
+case "$(jq -r '.[0].conclusion // "none"' <<<"${run:-[]}" 2>/dev/null)" in
+  success) ok "latest scheduled sweep passed: run $(jq -r '.[0].databaseId' <<<"$run") at $(jq -r '.[0].createdAt' <<<"$run")" ;;
+  none)    soft "no scheduled sweep has run yet" ;;
+  *)       bad "latest scheduled sweep: $(jq -c '.[0]' <<<"$run")" ;;
+esac
 
 echo "Other links"
 [ $# -eq 0 ] && soft "no video/social URLs passed: pass them as arguments"

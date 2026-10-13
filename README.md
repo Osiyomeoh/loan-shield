@@ -17,12 +17,13 @@ Arc's Borrow Kit lends USDC against cirBTC through Morpho Blue. When the loan's 
 | Part | Status |
 |---|---|
 | `LoanShield.sol` contract | **built**. 39 tests: unit, fuzz, invariant, and fork tests against the real Arc mainnet market |
-| Keeper (polling) and webhook receiver (`app/`) | **built**. Unit tested (the app suite is 55 tests: keeper, webhook, the chain reader, the owner's transactions and the site's display helpers), plus end to end on a local fork of Arc mainnet |
-| End-to-end run on a local fork (`scripts/e2e-local.sh`) | **built**. 21 checks: a real loan in the real cirBTC market, rescued by the keeper and by the webhook, each exactly once |
+| Keeper (polling) and webhook receiver (`app/`) | **built**. Unit tested (the app suite is 80 tests: keeper, webhook, the event scan behind the sweep and the home-page totals, the Borrow Kit alert request checked against Circle's SDK, the chain reader, the owner's transactions and the site's display helpers), plus end to end on a local fork of Arc mainnet |
+| Hosted keeper for every protected loan: the webhook checks the wallet an alert names, and a sweep every 5 minutes (`app/scripts/sweep.ts`, `.github/workflows/keeper.yml`) checks every loan with a policy | **built, not yet live.** Unit tested and run end to end on a local fork. The sweep ran report-only against Arc mainnet on 2026-10-13: it read blocks 25,712,043–25,756,225 (4 shield events), found the demo loan and judged it healthy (HF 1.7907 ≥ trigger 1.3000), and its next pass started at the following block. The webhook change goes live with the next Vercel deploy, and the schedule starts once this code is on GitHub with the `KEEPER_PRIVATE_KEY` secret ([details](#hosted-keeper-for-every-protected-loan)) |
+| End-to-end run on a local fork (`scripts/e2e-local.sh`) | **built**. 33 checks: a real loan in the real cirBTC market, rescued by the keeper, by the webhook (from its watch list, and from an alert that only names the wallet) and by the sweep, each exactly once; the home-page totals match the chain |
 | Circle Kit scripts: `buy-cirbtc` (Swap Kit), `open-loan` and `register-webhook` (Borrow Kit), and the Borrow Kit column of `status` | `buy-cirbtc` and `open-loan` **ran on Arc mainnet** on 2026-10-13 and opened the demo loan ([transactions](#live-on-arc-mainnet)), and the Borrow Kit column of `status` read it back. `register-webhook` **ran on Arc mainnet** on 2026-10-13: Borrow Kit confirmed the demo loan's health-band notifications go to the hosted [`/api/webhook`](https://loan-shield-theta.vercel.app/api/webhook). These scripts call Circle's live services, which a local fork can't provide |
 | Web site (`app/web/`, React) | **built**. Seven pages, dark and light themes. `npm run build` typechecks and builds it, and CI runs that too. The display helpers have 11 unit tests. Checked against Arc mainnet and a local fork, at desktop and phone width, in both themes |
-| Turning protection on in the browser (`/app`, My loan) | **built**. Connect a wallet and the page finds its loan, then sends `approve`, `deposit`, `setPolicy`, `withdraw` and `clearPolicy` through that wallet, each simulated first; the site never holds a key. `scripts/e2e-browser.sh` drives it in Chrome against a local fork: 22 checks, each owner action verified on-chain. Not yet run on mainnet with a real wallet extension. The hosted keeper watches only the demo loan, so a newly protected loan needs its own keeper for now; the page says so and gives the command |
-| CI (`.github/workflows/ci.yml`) | **passes** on GitHub Actions: contracts 39/39, app 45/45, the web build and the end-to-end run. First green on 2026-10-12 (run 38317984750), latest on 2026-10-13 (run 38371879121, before the My loan page and its 10 new tests). CI doesn't run the browser end-to-end check |
+| Turning protection on in the browser (`/app`, My loan) | **built**. Connect a wallet and the page finds its loan, then sends `approve`, `deposit`, `setPolicy`, `withdraw` and `clearPolicy` through that wallet, each simulated first; the site never holds a key. Once a loan is protected, one more signature (no transaction, no gas) sends its Borrow Kit health-band alerts to the hosted keeper. `scripts/e2e-browser.sh` drives it in Chrome against a local fork: 28 checks, each owner action verified on-chain, and the alert signature checked (signer, webhook address, deadline) against a stand-in for Circle's API. Not yet run on mainnet with a real wallet extension |
+| CI (`.github/workflows/ci.yml`) | **passes** on GitHub Actions: contracts 39/39, app 45/45, the web build and the end-to-end run. First green on 2026-10-12 (run 38317984750), latest on 2026-10-13 (run 38386969096, commit f492b12, before the hosted keeper and its 25 new tests). CI doesn't run the browser end-to-end check |
 | Deployed on Arc mainnet | **deployed** 2026-10-13 at [`0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04`](https://explorer.arc.io/address/0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04). Its runtime code matches this repo's build byte for byte, apart from the two constructor addresses |
 | Source verified on explorer.arc.io | **planned** |
 | Live mainnet rescue | **done** 2026-10-13: the keeper's [`0x6a26…ea3f`](https://explorer.arc.io/tx/0x6a2633b3fe07f715a94da58e37e00fe903eb02ee986c9775a44fd0ea491cea3f) repaid 1.253229 USDC of the demo loan from its buffer, HF 1.236 → 1.800. Borrow Kit's `getLoans` agrees: HF 1.79999 (SAFE), liquidation price $46,552 |
@@ -55,14 +56,16 @@ The contract computes health with Morpho's own formula, oracle and rounding, aft
    │ rescue() tx, sent only when preview says Ready and a dry run succeeds
  Keeper (app/), whose key holds only gas money
    scripts/keeper.ts          polls every watched loan every POLL_SECONDS (default 30)
-   api/webhook.ts             Borrow Kit morpho.healthBandCrossed POST → re-check on-chain → same decision
+   api/webhook.ts             Borrow Kit morpho.healthBandCrossed POST → re-check the alert's wallet on-chain → same decision
+   scripts/sweep.ts           every 5 min on GitHub Actions: every loan with a policy, from the shield's events → same decision
  Web site (app/web/, React)   reads the chain over the public RPC: HF, buffer, policy, rescue history,
-                              "would a rescue run now?" (eth_call). No wallet, no backend
+                              "would a rescue run now?" (eth_call). The owner's transactions go through their own wallet.
+                              api/stats.ts totals the shield's events for the home page
 ```
 
 Design choices:
 
-- **The keeper decides nothing.** The keeper and the webhook only send `rescue` when the contract's own `preview` returns `Ready` and a dry run of `rescue` succeeds. Even then, the contract checks every rule again. A buggy or hostile keeper can waste its own gas and nothing else.
+- **The keeper decides nothing.** The keeper, the webhook and the sweep only send `rescue` when the contract's own `preview` returns `Ready` and a dry run of `rescue` succeeds. Even then, the contract checks every rule again. A buggy or hostile keeper can waste its own gas and nothing else.
 - **The buffer is plain USDC and earns no yield.** It has to be withdrawable exactly when it's needed. On 2026-10-12, Arc's Galaxy USDC vault held 0 idle USDC and its only market was 99.47% utilized, so a yield-bearing buffer could have failed at the worst moment.
 - **No keeper fee is taken from the buffer.** Every cent leaves as your repayment or your withdrawal. The keeper pays its own gas.
 - **It works with any Morpho market on Arc that lends USDC**, not just cirBTC. `setPolicy` rejects markets whose loan token isn't USDC.
@@ -107,23 +110,28 @@ You need [Arc Foundry](https://github.com/circlefin/arc-foundry) v0.8.0-2 (`arc-
 # Contracts: 39 tests. The fork tests read Arc mainnet at a pinned block through the public RPC.
 arc-forge test
 
-# App: typecheck and 55 unit tests (keeper, webhook, the chain reader, the owner's transactions, the site's display helpers, ABI drift)
+# App: typecheck and 80 unit tests (keeper, webhook, the event scan behind the sweep and the stats, the Borrow Kit alert
+# request against Circle's SDK, the chain reader, the owner's transactions, the site's display helpers, ABI drift)
 cd app && npm ci && npm run typecheck && npm test
 
 # Web site: typecheck and production build into app/web/dist
 cd app/web && npm ci && npm run build
 
-# End to end, 21 checks. Forks Arc mainnet locally, opens a real loan in the real cirBTC market with throwaway
-# keys, deploys LoanShield, then runs the same protect / keeper / webhook / status code used on mainnet.
+# End to end, 33 checks. Forks Arc mainnet locally, opens a real loan in the real cirBTC market with throwaway
+# keys, deploys LoanShield, then runs the same protect / keeper / webhook / sweep / stats / status code used on mainnet.
 scripts/e2e-local.sh
 
-# The My loan page in Chrome, 22 checks. Same kind of fork and a fresh loan, driven through a test wallet that
-# forwards to it: connect, protect, withdraw, change the policy, add, turn off, each checked on-chain.
+# The My loan page in Chrome, 28 checks. Same kind of fork and a fresh loan, driven through a test wallet that
+# forwards to it: connect, protect, send the loan's alerts to the keeper (Circle's API stubbed), withdraw, change
+# the policy, add, turn off, each checked on-chain.
 # Needs Google Chrome and npm ci in app/web. Pass a directory to also save screenshots.
 scripts/e2e-browser.sh
 
 # Read-only against Arc mainnet: live market data, the RPC's eth_getLogs limit, archive state
 cd app && npx tsx e2e/mainnet-read.ts
+
+# The hosted keeper's sweep against Arc mainnet, report only: finds every loan with a policy and checks each one
+cd app && env -u KEEPER_PRIVATE_KEY SHIELD_ADDRESS=0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04 npx tsx scripts/sweep.ts
 ```
 
 What the end-to-end run checks, in order:
@@ -133,7 +141,9 @@ What the end-to-end run checks, in order:
 - A forged `LIQUIDATABLE` webhook against the now-healthy loan sends nothing.
 - The borrower borrows more (HF back to 1.6). A real alert makes the webhook rescue the loan. Redelivering the same alert to a fresh instance, whose memory of seen ids is empty, sends nothing.
 - A gas estimate taken without Morpho's interest accrual runs out of gas, and the keeper's `sendRescue` lands anyway (see [Arc findings](#arc-findings)).
-- Exactly three `Rescued` events are emitted. The web page's reader finds all three and decodes the loan.
+- With an empty `WATCH` list, a forged alert naming a wallet that has no policy only reads the chain (`NoPolicy`). After a 300 USDC top-up and more borrowing, an alert that names the borrower gets the loan rescued.
+- The sweep, with no watch list, finds the loan from the shield's events. Without a key it only reports; with one it rescues the loan. The next pass starts at the block after the last one it read and finds the loan healthy.
+- Exactly five `Rescued` events are emitted. The stats endpoint counts 1 loan protected and 5 rescues, and its USDC on standby equals the buffer on chain. The web page's reader finds all five rescues and decodes the loan.
 - Two read-only checks run against Arc mainnet itself.
 
 ## Web site
@@ -144,6 +154,10 @@ A loan's page shows its live health factor against its trigger, target and liqui
 
 My loan (`/app`) is where a borrower turns protection on. It lists the browser's wallets (EIP-6963, with `window.ethereum` as a fallback). Once one connects, the page reads that address's loan and asks the wallet to switch to Arc if it's on another network. Then it offers one form: how much standby USDC to deposit, prefilled with what the first rescue would repay, and when to rescue (three presets, or custom numbers checked against `setPolicy`'s bounds before anything is sent). Beside it, it shows where rescues would start and where liquidation would move. Review lists the transactions: an `approve` for exactly the amount, `deposit`, and `setPolicy`. Each is simulated with `eth_call`, then sent by the wallet, which shows and signs it; the site never sees a key. Once a loan is protected, the same place offers Add USDC, Withdraw, Change policy and Turn off. Any other address opens read-only.
 
+The protected loan's page also offers to send its Borrow Kit health-band alerts to the hosted keeper. On click, it looks up the wallet's Borrow Kit loan (not before, so the address isn't sent to Circle on page load). Then it asks the wallet for one EIP-712 signature (`eth_signTypedData_v4`: no transaction, no gas) and posts it to Borrow Kit's `webhookRegistration` endpoint. That is the same request `BorrowKit.registerWebhook` makes; `app/test/borrowkit.test.ts` checks the signature, URL and body against Circle's SDK. Borrow Kit keeps one alert address per loan, and its loan record doesn't include that address, so the page remembers a sent registration only in that browser.
+
+The home page shows totals that `app/api/stats.ts` rebuilds from the shield's events: loans protected (a policy on and USDC in the buffer), USDC on standby, rescues sent and the debt they repaid. Vercel's edge caches the answer for 2 minutes, and the section hides if the endpoint fails.
+
 Which loan `/app` shows comes from URL parameters: `?borrower=0x…` (otherwise the connected wallet's), `&shield=0x…` and optionally `&market=0x…`. The defaults are the live shield and the cirBTC market; `/demo` always shows the demo loan. To look at a loan on a local fork (for example one made by `e2e/setup-local-loan.ts` against `arc-anvil`), run the dev server and add `rpc`:
 
 ```sh
@@ -153,12 +167,29 @@ cd app/web && npm ci && npm run dev
 
 `?rpc=` accepts only `http://127.0.0.1:<port>` or `http://localhost:<port>`. Any other value is ignored, so a shared link can't point the page at someone else's node. In fork mode, the site shows a "Local fork" chip and prints fork-only addresses and transactions as plain text instead of explorer links.
 
+## Hosted keeper for every protected loan
+
+Anyone who turns protection on is covered by this site's keeper, with no list to join. This is built and tested but not yet live; the [status table](#status) says what has to happen first. Two paths lead to the same decision (`checkAndRescue`: the contract's `preview` must say `Ready` and a dry run of `rescue` must succeed), and the contract checks every rule again:
+
+- **Alerts, at once.** If the owner pointed the loan's Borrow Kit alerts at `/api/webhook` (one signature on My loan, or `register-webhook`), each health-band crossing makes the handler check that wallet's loan right away. See the [trust model](#webhook-trust-model).
+- **A sweep, every 5 minutes.** `.github/workflows/keeper.yml` runs `app/scripts/sweep.ts`. It rebuilds the set of loans with a policy from the shield's own `PolicySet` and `PolicyCleared` events, reading from the deploy block in 10,000-block chunks (the public RPC's limit), at most 4 at a time. It checks each loan and rescues those the contract reports as `Ready`. The policies found and the next block to read are kept between runs in the Actions cache, so a run reads only new blocks; without the cache it rescans from the deploy block. The sweep covers owners who never set up alerts, and alerts that never arrive. Without the `KEEPER_PRIVATE_KEY` repository secret, it only reports.
+
+Its limits:
+
+- **GitHub's schedule is best effort.** [GitHub's docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) say 5 minutes is the shortest interval, scheduled runs can start late when Actions is under heavy load and some may be dropped, they run only on the default branch, and a public repository's schedules are turned off after 60 days without activity. Actions is free for public repositories on GitHub's standard runners; in a private one, every run counts against the account's minutes ([billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)).
+- **One gas wallet, two senders.** The webhook (on Vercel) and the sweep (on GitHub) sign with the same keeper key. If both send at the same moment, one transaction can fail on its nonce or lose the race to the other. The contract lets only one rescue reach the target (claim 3), and the next sweep checks the loan again.
+- **Gas money runs out.** The keeper wallet holds only gas: it started with 0.1 USDC, and a rescue costs about 0.0036 USDC. When it runs dry, the hosted keeper stops sending until it is topped up. Anyone else can still send `rescue`.
+- **Dust is left to others.** The hosted keeper pays the gas for loans it doesn't own, so it skips rescues that would repay under 0.01 USDC (`HOSTED_MIN_REPAY`). Anyone else can still send them.
+- **Forged alerts cost reads.** Anyone can POST to the webhook, and each POST makes it read the chain. The endpoint has no rate limit yet.
+
+`npm run sweep` in `app/` runs one pass with `app/.env` (`SHIELD_ADDRESS`, optional `KEEPER_PRIVATE_KEY` and `SWEEP_STATE`). On 2026-10-13, `/api/stats` (the same event scan, summed) read Arc mainnet at block 25,758,628: 1 loan protected, 0.746771 USDC on standby, 1 rescue, 1.253229 USDC repaid. Those are the demo loan's figures from [Live on Arc mainnet](#live-on-arc-mainnet).
+
 ## Webhook trust model
 
-Borrow Kit can POST a `morpho.healthBandCrossed` notification when a loan crosses a health band (`register-webhook` sets this up). Circle's Borrow Kit README (`@circle-fin/borrow-kit` 1.0.0, "Receiving health-band notifications") says: *"A permissionless receiver cannot yet verify that a notification came from Circle, so treat one as a prompt to check the loan, not as its state."* `api/webhook.ts` follows that rule:
+Borrow Kit can POST a `morpho.healthBandCrossed` notification when a loan crosses a health band (`register-webhook` or the My loan page sets this up). Circle's Borrow Kit README (`@circle-fin/borrow-kit` 1.0.0, "Receiving health-band notifications") says: *"A permissionless receiver cannot yet verify that a notification came from Circle, so treat one as a prompt to check the loan, not as its state."* `api/webhook.ts` follows that rule:
 
-- **Nothing in the payload decides anything.** The wallet, loan id and band in the body are logged and then ignored. The handler re-reads every loan in **its own** `WATCH` list on-chain and rescues only the ones the contract reports as `Ready`. The most a forged POST can do is make the keeper read the chain.
-- **Duplicates are handled.** Delivery is at-least-once, so the handler deduplicates on `notification.event_id`, as the README says to. It records an id only after the notification has been handled without errors, so a failed check is retried when the notification is redelivered. The memory of seen ids is per instance. A duplicate that reaches a second instance is still harmless, because the second check finds the loan already rescued (e2e check "redelivered alert on a fresh instance sends nothing").
+- **The payload only chooses which loans to read; the contract decides.** The handler reads, on-chain, every loan in its own `WATCH` list plus the loan of the wallet the alert names, in each of `ALERT_MARKETS` (default: the cirBTC market). The loan id and band in the body are only logged. It rescues only the loans the contract reports as `Ready`. A rescue can only repay that borrower's loan, from that borrower's own buffer, up to that borrower's own target, so the most a forged POST can do is make the keeper read the chain, or send a rescue the owner's policy already calls for.
+- **Duplicates are handled.** Delivery is at-least-once, so the handler deduplicates on `notification.event_id`, as the README says to. It records an id only after the notification has been handled without errors, so a failed check is retried when the notification is redelivered. The record holds the wallet as well, so a forged request that reuses a real event id with another wallet can't mark the real alert as handled. The memory of seen ids is per instance. A duplicate that reaches a second instance is still harmless, because the second check finds the loan already rescued (e2e check "redelivered alert on a fresh instance sends nothing").
 - **Without `KEEPER_PRIVATE_KEY`, it never sends.** It checks and reports what it would do.
 
 ## Arc findings
@@ -220,8 +251,7 @@ Each comment sits on its own line because zsh, macOS's default shell, doesn't tr
 ## Limitations and what's next
 
 - A rescue needs USDC in the buffer. A partial rescue happens if the buffer runs short, and `EmptyBuffer` if it is empty. The page shows the buffer next to the debt.
-- The keeper must be running, or the webhook reachable, for a rescue to happen in time. Because `rescue` is permissionless, any number of independent keepers can watch the same loan.
-- A webhook only wakes one deployment's keeper for the loans in its `WATCH` list. Serving many users needs a watch list kept in storage, which is planned. Until then, a loan protected on My loan needs a keeper of its own (anyone can send `rescue`); the page says so and gives the command.
+- The keeper must be running, or the webhook reachable, for a rescue to happen in time. The hosted keeper is one gas wallet behind a webhook and GitHub's best-effort schedule ([its limits](#hosted-keeper-for-every-protected-loan)). Because `rescue` is permissionless, an owner can also run their own keeper (`npm run keeper` with `WATCH`), and any number of keepers can watch the same loan.
 - **Next:** Borrow Kit lets an integrator charge an origination fee and keep 90% of it ([borrow fees](https://docs.arc.io/app-kit/concepts/borrow-fees)). A wallet that adds Loan Shield can offer loans that don't get liquidated while you sleep and earn that fee. The same contract already covers every USDC market on Arc's Morpho deployment, such as USDC/XAUM at LLTV 0.77, where the liquidation bonus is 7.41%.
 
 ## Repo layout
@@ -231,9 +261,9 @@ src/LoanShield.sol              the contract
 src/libraries/HealthLib.sol     Morpho's math: health, shares↔assets rounding, interest, liquidation incentive
 test/                           unit, fork (test/fork/) and invariant (test/invariant/) tests
 script/Deploy.s.sol             mainnet deploy (refuses any chain but 5042)
-app/src/                        shared TypeScript: config, viem chain client, keeper decision, webhook handler
-app/scripts/                    operator CLIs: buy-cirbtc, open-loan, protect, status, register-webhook, keeper
-app/api/webhook.ts              Vercel function for Borrow Kit notifications
+app/src/                        shared TypeScript: config, viem chain client, keeper decision, webhook handler, event scan
+app/scripts/                    operator CLIs: buy-cirbtc, open-loan, protect, status, register-webhook, keeper, sweep
+app/api/                        Vercel functions: webhook.ts (Borrow Kit notifications), stats.ts (home-page totals)
 app/web/                        the React site: pages, components and display helpers
 app/public/                     the dependency-free chain reader (shield.js), also served at /shield.js
 app/e2e/                        local-fork helpers and the read-only mainnet check
@@ -241,6 +271,7 @@ app/web/e2e/                    the browser check of My loan (Playwright, Chrome
 scripts/e2e-local.sh            the end-to-end run
 scripts/e2e-browser.sh          the browser end-to-end run of My loan
 scripts/verify-submission.sh    pre-submission checks (repo, claims, secrets, live deployment)
+.github/workflows/               ci.yml (tests on every push), keeper.yml (the hosted keeper's sweep every 5 minutes)
 ```
 
 ## License

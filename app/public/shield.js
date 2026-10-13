@@ -1,9 +1,10 @@
 // @ts-check
 // Reads Loan Shield and Morpho Blue state from Arc mainnet over plain JSON-RPC, in the browser or in Node.
-// No dependencies and no keys: every request it sends is a read (eth_call, eth_getLogs, eth_getCode). It also builds
-// the calldata for an owner's own transactions (approve, deposit, withdraw, setPolicy, clearPolicy), which the site
-// hands to the owner's wallet to sign. The selectors and topics below are checked against the compiled contract and
-// against viem's encoder by test/web.test.ts.
+// No dependencies and no keys: every request it sends to the chain is a read (eth_call, eth_getLogs, eth_getCode).
+// It also builds the calldata for an owner's own transactions (approve, deposit, withdraw, setPolicy, clearPolicy),
+// which the site hands to the owner's wallet to sign, and the keyless Borrow Kit request that points an owner's loan
+// alerts at a keeper. The selectors and topics below are checked against the compiled contract and against viem's
+// encoder by test/web.test.ts; the Borrow Kit request against Circle's own SDK by test/borrowkit.test.ts.
 
 export const ARC = { chainId: 5042, rpc: "https://rpc.mainnet.arc.io", explorer: "https://explorer.arc.io" };
 export const MORPHO = "0x34CD04070dD72b14E241112F6d83812Df5Af7fCD";
@@ -441,4 +442,84 @@ export async function waitForReceipt(rpc, hash, { intervalMs = 1000, timeoutMs =
     await sleep(intervalMs);
   }
   throw new Error(`no receipt for ${hash} after ${Math.round(timeoutMs / 1000)} s`);
+}
+
+/** Circle's Borrow Kit API. Keyless, and it answers browsers from any origin. */
+export const BORROW_KIT_API = "https://api.circle.com/v1/borrowKit";
+/** How long a webhook registration signature stays valid: Borrow Kit's own default; the service refuses over 300 s. */
+export const WEBHOOK_DEADLINE_SECONDS = 240;
+
+/**
+ * The wallet's open Borrow Kit loan in `market`, or undefined if it has none (a loan opened on Morpho directly,
+ * without Borrow Kit, has no Borrow Kit alerts).
+ * @param {typeof fetch} fetchImpl @param {string} wallet @param {string} [market]
+ * @returns {Promise<{ loanId: string, healthFactor?: string, healthFactorBand?: string } | undefined>}
+ */
+export async function findBorrowKitLoan(fetchImpl, wallet, market = CIRBTC_MARKET) {
+  /** @type {string | undefined} */
+  let pageAfter;
+  for (let page = 0; page < 20; page++) {
+    const url = new URL(`${BORROW_KIT_API}/loans`);
+    url.searchParams.set("walletAddress", wallet);
+    url.searchParams.set("chain", "ARC");
+    if (pageAfter) url.searchParams.set("pageAfter", pageAfter);
+    const res = await fetchImpl(url.toString());
+    if (!res.ok) throw new Error(`Borrow Kit answered ${res.status} when asked for this wallet's loans`);
+    const body = await res.json();
+    /** @type {any[]} */
+    const loans = Array.isArray(body?.data?.loans) ? body.data.loans : [];
+    const loan = loans.find((l) => typeof l?.loanId === "string" && String(l.marketId).toLowerCase() === market.toLowerCase() && l.status !== "closed");
+    if (loan) return loan;
+    pageAfter = typeof body?.data?.pagination?.pageAfter === "string" ? body.data.pagination.pageAfter : undefined;
+    if (!pageAfter) return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * EIP-712 typed data for Borrow Kit's `WebhookRegistration`, ready for `eth_signTypedData_v4`: the owner of `loanId`
+ * asks Borrow Kit to send the loan's health-band alerts to `webhookUrl` (https, or "" to stop them). Same domain,
+ * types and message as Circle's SDK (`@circle-fin/provider-borrow-service`); the domain has no verifying contract
+ * because Circle checks the signature off-chain. Signing it sends no transaction and costs no gas.
+ * @param {{ loanId: string, owner: string, webhookUrl: string, deadline: number, chainId?: number }} p
+ */
+export function webhookRegistration({ loanId, owner, webhookUrl, deadline, chainId = ARC.chainId }) {
+  return {
+    domain: { name: "BorrowKit Webhook Registration", version: "1", chainId },
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+      ],
+      WebhookRegistration: [
+        { name: "loanId", type: "string" },
+        { name: "owner", type: "address" },
+        { name: "webhookUrl", type: "string" },
+        { name: "deadline", type: "uint256" },
+      ],
+    },
+    primaryType: "WebhookRegistration",
+    message: { loanId, owner, webhookUrl, deadline },
+  };
+}
+
+/**
+ * Sends a signed `WebhookRegistration` to Borrow Kit, as the SDK's `registerWebhook` does.
+ * @param {typeof fetch} fetchImpl
+ * @param {{ loanId: string, webhookUrl: string, deadline: number, signature: string }} p
+ * @returns {Promise<{ loanId: string, webhookUrl: string | null }>}
+ */
+export async function postWebhookRegistration(fetchImpl, { loanId, webhookUrl, deadline, signature }) {
+  const res = await fetchImpl(`${BORROW_KIT_API}/loans/${encodeURIComponent(loanId)}/webhookRegistration`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ webhookUrl, deadline, walletSignature: signature }),
+  });
+  if (res.status === 404) throw new Error("Borrow Kit has no loan with this id");
+  if (res.status === 401) throw new Error("Borrow Kit didn't accept the signature (it must come from the loan's owner)");
+  if (!res.ok) throw new Error(`Borrow Kit answered ${res.status}`);
+  const body = await res.json();
+  if (typeof body?.data?.loanId !== "string") throw new Error("Borrow Kit's answer had no loan id");
+  return { loanId: body.data.loanId, webhookUrl: body.data.webhookUrl ?? null };
 }

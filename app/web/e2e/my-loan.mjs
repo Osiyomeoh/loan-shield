@@ -1,10 +1,15 @@
 // Browser end-to-end check of the My loan page (/app) against a LOCAL arc-anvil fork, in Chrome through Playwright.
 // A test EIP-1193 wallet, announced through EIP-6963, forwards every call to the fork, where the borrower is
-// impersonated, so eth_sendTransaction needs no key. Each owner action is then checked on-chain.
+// impersonated, so eth_sendTransaction needs no key. Each owner action is then checked on-chain. The one typed-data
+// signature (sending Borrow Kit alerts to the keeper) is signed with the borrower's throwaway fork key, and Circle's
+// Borrow Kit API is answered by a stand-in, since a fork has no Borrow Kit.
 // Run it through scripts/e2e-browser.sh, which starts the fork and the site and opens the loan.
-// Env: ARC_RPC_URL, SITE, SHIELD_ADDRESS, BORROWER. Optional argument: a directory for screenshots.
+// Env: ARC_RPC_URL, SITE, SHIELD_ADDRESS, BORROWER, PRIVATE_KEY (the borrower's throwaway key from
+// e2e/setup-local-loan.ts). Optional argument: a directory for screenshots.
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright-core";
+import { recoverTypedDataAddress } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import * as web from "../../public/shield.js";
 
 const outDir = process.argv[2];
@@ -13,6 +18,7 @@ const RPC = need("ARC_RPC_URL");
 const SITE = need("SITE");
 const shield = need("SHIELD_ADDRESS");
 const borrower = need("BORROWER");
+const borrowerAccount = privateKeyToAccount(need("PRIVATE_KEY"));
 if (outDir) mkdirSync(outDir, { recursive: true });
 const rpc = web.createRpc(RPC);
 const raw = async (method, params = []) => {
@@ -26,6 +32,7 @@ const raw = async (method, params = []) => {
 if (!/^http:\/\/127\.0\.0\.1:/.test(RPC)) throw new Error("ARC_RPC_URL must be a local fork");
 if ((await raw("eth_chainId")) !== "0x13b2") throw new Error("the fork is not chain 5042");
 await raw("anvil_impersonateAccount", [borrower]);
+if (borrowerAccount.address.toLowerCase() !== borrower.toLowerCase()) throw new Error("PRIVATE_KEY is not the borrower's key");
 
 const results = [];
 const check = (name, ok, detail = "") => {
@@ -74,6 +81,11 @@ function wallet({ rpc, account }) {
           connected = false;
           mem.set("connected", "");
           return null;
+        case "eth_signTypedData_v4": {
+          if (window.__reject) throw Object.assign(new Error("User rejected the request."), { code: 4001 });
+          const [address, typed] = params;
+          return window.__e2eSignTypedData(address, typed);
+        }
         case "eth_sendTransaction": {
           if (window.__reject) throw Object.assign(new Error("User rejected the request."), { code: 4001 });
           const [tx] = params;
@@ -96,10 +108,44 @@ function wallet({ rpc, account }) {
   window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
 }
 
+// Stands in for Circle's Borrow Kit API, which a fork doesn't have: the borrower has one open loan in the cirBTC
+// market, and a webhook registration is recorded and accepted. The page's request itself is checked against Circle's
+// SDK in app/test/borrowkit.test.ts; here the signature is checked against the borrower.
+const BORROW_KIT_LOAN = "0e2e0e2e-0000-4000-8000-0000000e2e01";
+const circle = { requests: [], registrations: [] };
+const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type", "access-control-allow-methods": "GET,POST" };
+async function borrowKit(route) {
+  const req = route.request();
+  const url = new URL(req.url());
+  if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+  circle.requests.push(`${req.method()} ${url.pathname}`);
+  if (req.method() === "GET" && url.pathname === "/v1/borrowKit/loans") {
+    const mine = url.searchParams.get("walletAddress")?.toLowerCase() === borrower.toLowerCase() && url.searchParams.get("chain") === "ARC";
+    const loans = mine ? [{ loanId: BORROW_KIT_LOAN, marketId: web.CIRBTC_MARKET, status: "active", healthFactorBand: "SAFE" }] : [];
+    return route.fulfill({ headers: cors, json: { data: { loans, pagination: {} } } });
+  }
+  const registration = url.pathname.match(/^\/v1\/borrowKit\/loans\/([^/]+)\/webhookRegistration$/);
+  if (req.method() === "POST" && registration) {
+    const loanId = decodeURIComponent(registration[1]);
+    const body = req.postDataJSON();
+    circle.registrations.push({ loanId, body, at: Math.floor(Date.now() / 1000) });
+    return route.fulfill({ headers: cors, json: { data: { loanId, webhookUrl: body.webhookUrl } } });
+  }
+  return route.fulfill({ status: 404, headers: cors, json: {} });
+}
+
 const browser = await chromium.launch({ channel: "chrome" });
 const errors = [];
 async function page(scheme, width) {
   const ctx = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme, deviceScaleFactor: 1 });
+  await ctx.route("https://api.circle.com/**", borrowKit);
+  // eth_signTypedData_v4 for the test wallet: only the borrower's own account, signed with its throwaway fork key.
+  await ctx.exposeFunction("__e2eSignTypedData", async (address, json) => {
+    if (address.toLowerCase() !== borrower.toLowerCase()) throw new Error(`asked to sign for ${address}`);
+    const { domain, types, primaryType, message } = JSON.parse(json);
+    const { EIP712Domain: _, ...rest } = types;
+    return borrowerAccount.signTypedData({ domain, types: rest, primaryType, message });
+  });
   await ctx.addInitScript(wallet, { rpc: RPC, account: borrower });
   const p = await ctx.newPage();
   p.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
@@ -151,6 +197,29 @@ await until(p, "Manage protection");
 check("protected: manage panel shown", true);
 await p.locator(".manage").scrollIntoViewIfNeeded();
 await shot(p, "4-manage-dark-1440");
+
+// Send the loan's Borrow Kit alerts to the keeper: one typed-data signature, no transaction.
+const sentBefore = (await p.evaluate(() => window.__sent)).length;
+await p.getByRole("button", { name: "Send alerts to the keeper" }).click();
+await until(p, "Borrow Kit confirmed it", 30_000);
+const reg = circle.registrations.at(-1);
+check("alerts: page asked Borrow Kit for the loan, then registered it once", circle.requests.join(", ") === `GET /v1/borrowKit/loans, POST /v1/borrowKit/loans/${BORROW_KIT_LOAN}/webhookRegistration`, circle.requests.join(", "));
+if (reg) {
+  const typed = web.webhookRegistration({ loanId: reg.loanId, owner: borrower, webhookUrl: reg.body.webhookUrl, deadline: reg.body.deadline });
+  const { EIP712Domain: _, ...types } = typed.types;
+  const signer = await recoverTypedDataAddress({ domain: typed.domain, types, primaryType: "WebhookRegistration", message: typed.message, signature: reg.body.walletSignature });
+  check("alerts: signed by the borrower", signer.toLowerCase() === borrower.toLowerCase(), signer);
+  check("alerts: point at the hosted keeper's webhook", reg.body.webhookUrl === "https://loan-shield-theta.vercel.app/api/webhook", reg.body.webhookUrl);
+  const ahead = reg.body.deadline - reg.at;
+  check("alerts: deadline within Borrow Kit's 300 s", ahead > 0 && ahead <= 300, `${ahead} s ahead`);
+}
+check("alerts: no transaction sent", (await p.evaluate(() => window.__sent)).length === sentBefore);
+await p.locator(".keeper-alerts").scrollIntoViewIfNeeded();
+await shot(p, "4b-alerts-dark-1440");
+await p.reload();
+await until(p, "alerts to the keeper from this browser");
+check("alerts: remembered after a reload", true);
+await until(p, "Manage protection");
 
 // Withdraw half.
 await p.getByRole("tab", { name: "Withdraw" }).click();

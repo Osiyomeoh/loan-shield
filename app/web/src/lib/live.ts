@@ -36,7 +36,7 @@ const entries = new Map<string, Entry>();
 const deployBlocks = new Map<string, Promise<bigint>>();
 
 export const isValidLoan = (l: Loan) => web.isAddress(l.shield) && web.isAddress(l.borrower) && web.isBytes32(l.market);
-/** The project's own demo loan, the one the hosted keeper watches. */
+/** The project's own demo loan, opened on Arc mainnet for the README's "Live on Arc mainnet". */
 export const isDemoLoan = (l: Loan) => (["shield", "borrower", "market"] as const).every((k) => l[k].toLowerCase() === DEFAULTS[k].toLowerCase());
 const keyOf = (l: Loan) => `${l.shield}|${l.borrower}|${l.market}`.toLowerCase();
 

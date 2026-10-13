@@ -7,6 +7,7 @@ broadcast/*/*/dry-run/
 node_modules/
 .vercel/
 app/web/dist/
+app/.sweep-state.json
 
 # Secrets: keys live only in your own .env, never in git
 .env

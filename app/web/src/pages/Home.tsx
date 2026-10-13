@@ -16,12 +16,18 @@ import { SplitWords } from "../components/Split";
 import { TiltCard } from "../components/TiltCard";
 import { compact, hfText, short, usd, usdc } from "../lib/format";
 import { useLive } from "../lib/live";
+import { useShieldStats } from "../lib/stats";
 import { PHOTOS, type Photo as PhotoT } from "../lib/photos";
 import { useTitle } from "../lib/useTitle";
 import { PILLS, verdict } from "../lib/view";
 import { SOURCES } from "../lib/sources";
 
 const Skel = ({ w = "6ch" }: { w?: string }) => <span className="skel" style={{ width: w }} />;
+/** A decimal USDC string from /api/stats, shown like the rest of the site: 4 decimals under 100, else 2. */
+function usdcAmount(text: string) {
+  const v = web.parseUnits(text, 6);
+  return web.formatUnits(v, 6, v >= 100_000_000n ? 2 : 4);
+}
 
 function Floating({ className, delay, children }: { className: string; delay: number; children: ReactNode }) {
   return (
@@ -87,6 +93,7 @@ const PEOPLE: { photo: PhotoT; tag: string; title: string; text: string }[] = [
 export default function Home() {
   useTitle("Loan Shield · USDC that rescues your BTC loan on Arc");
   const { market, loan, history } = useLive(DEFAULTS);
+  const stats = useShieldStats();
   const price = market ? web.collateralPrice(market) : undefined;
   const bonus = market ? web.liquidationIncentive(market.lltv) - 1 : undefined;
   const lltv = market ? Number(market.lltv) / 1e16 : undefined;
@@ -298,6 +305,44 @@ export default function Home() {
           </div>
         </Reveal>
       </section>
+
+      {stats !== null && (
+        <section className="section container" style={{ paddingTop: 0 }}>
+          <SectionHead eyebrow="Live on Arc mainnet" title="Every protected loan, counted from the chain.">
+            Totals rebuilt from the contract's own events, not from a database. A loan counts as protected while its policy is on and USDC stands behind it.
+          </SectionHead>
+          <Reveal>
+            <dl className="stats four" aria-busy={stats === undefined}>
+              <div>
+                <dt>Loans protected</dt>
+                <dd>{stats ? stats.loansProtected : <Skel w="2ch" />}</dd>
+              </div>
+              <div>
+                <dt>USDC on standby</dt>
+                <dd>{stats ? <>{usdcAmount(stats.usdcOnStandby)}<small>USDC</small></> : <Skel />}</dd>
+              </div>
+              <div>
+                <dt>Rescues sent</dt>
+                <dd>{stats ? stats.rescues : <Skel w="2ch" />}</dd>
+              </div>
+              <div>
+                <dt>Debt repaid by rescues</dt>
+                <dd>{stats ? <>{usdcAmount(stats.repaidByRescues)}<small>USDC</small></> : <Skel />}</dd>
+              </div>
+            </dl>
+            <p className="note">
+              {stats ? (
+                <>
+                  Contract <Explorer path={`address/${stats.shield}`}>{short(stats.shield)}</Explorer>, up to block{" "}
+                  <Explorer path={`block/${stats.block}`}>{stats.block.toLocaleString("en-US")}</Explorer>. Refreshed every 2 minutes.
+                </>
+              ) : (
+                "Reading the contract's events…"
+              )}
+            </p>
+          </Reveal>
+        </section>
+      )}
 
       <section className="section container" style={{ paddingTop: 0 }}>
         <SectionHead eyebrow="Who it's for" title="For anyone who borrows against BTC and has a life.">

@@ -1,5 +1,6 @@
 // The visitor's browser wallet (EIP-1193), found through EIP-6963 announcements or window.ethereum. The site never
-// sees a key: it asks the wallet for an account, asks it to switch to Arc, and hands it transactions to sign and send.
+// sees a key: it asks the wallet for an account, asks it to switch to Arc, and hands it transactions to sign and send
+// (and one gasless typed-data signature, to send Borrow Kit alerts to the keeper).
 import { useSyncExternalStore } from "react";
 import { onFork, rpc, web } from "../config";
 
@@ -140,6 +141,17 @@ export async function sendTransaction(tx: { to: string; data: string }): Promise
     if (gap > 20n) throw new Error(`Your wallet isn't on this local fork (its block ${theirs}, the fork's ${ours}).`);
   }
   return (await wallet.provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: tx.to, data: tx.data }] })) as string;
+}
+
+/**
+ * Asks the wallet to sign EIP-712 typed data (`eth_signTypedData_v4`). A signature, not a transaction: nothing is
+ * sent on-chain and it costs no gas. Wallets refuse typed data whose domain names another chain, hence the check.
+ */
+export async function signTypedData(typed: { domain: { chainId: number } }): Promise<string> {
+  const { wallet, account, chainId } = state;
+  if (!wallet || !account) throw new Error("Connect a wallet first.");
+  if (chainId !== typed.domain.chainId) throw new Error("Switch your wallet to Arc first.");
+  return (await wallet.provider.request({ method: "eth_signTypedData_v4", params: [account, JSON.stringify(typed)] })) as string;
 }
 
 function discover() {

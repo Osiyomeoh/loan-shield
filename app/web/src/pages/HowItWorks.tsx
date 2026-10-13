@@ -35,7 +35,7 @@ const FLOW: { title: string; text: ReactNode; formulas: string[] }[] = [
     title: "Someone watches the loan",
     text: (
       <>
-        <code>preview</code> says exactly what a rescue would do in the current block. The repo's keeper checks every watched loan every 30 seconds by default, and Borrow Kit's health-band webhook can wake it sooner. It sends only when <code>preview</code> says Ready and a dry run succeeds.
+        <code>preview</code> says exactly what a rescue would do in the current block. This site's keeper checks every loan with protection on about every 5 minutes, and a Borrow Kit health-band alert from your loan wakes it at once. It sends only when <code>preview</code> says Ready and a dry run succeeds.
       </>
     ),
     formulas: ["preview(borrower, market)  →  Ready?", "eth_call rescue  →  succeeds?  →  send"],
@@ -86,7 +86,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
   },
   {
     q: "What if nobody sends a rescue in time?",
-    a: "The contract makes a rescue possible; it can't send one by itself. If health falls below 1.00 before anyone rescues, a liquidator can act. The repo ships a polling keeper and a webhook receiver, and any number of independent keepers can watch the same loan.",
+    a: "The contract makes a rescue possible; it can't send one by itself. If health falls below 1.00 before anyone rescues, a liquidator can act. This site runs a keeper for every protected loan, and the repo ships the same keeper for anyone to run: any number of independent keepers can watch the same loan.",
   },
   {
     q: "Is the contract source verified?",
@@ -133,7 +133,8 @@ export default function HowItWorks() {
     { part: "register-webhook script (Borrow Kit)", detail: "Ran on Arc mainnet 2026-10-13: the demo loan's health-band alerts go to the hosted webhook", status: "done", tone: "good" },
     { part: "Source verified on explorer.arc.io", detail: "Not done yet", status: "planned", tone: "" },
     { part: "Turning protection on in the browser", detail: "My loan page: connect a wallet, and it signs each step. Tested end to end on a local fork of Arc mainnet", status: "built", tone: "good" },
-    { part: "Watch list kept in storage, for many users", detail: "A webhook wakes one deployment's keeper for the loans in its WATCH list", status: "planned", tone: "" },
+    { part: "Hosted keeper for every protected loan", detail: "A sweep every 5 minutes finds each policy from the contract's events, and any wallet's Borrow Kit alert makes the webhook check that wallet's loan. Unit tested, and the sweep run against Arc mainnet", status: "built", tone: "good" },
+    { part: "Sending Borrow Kit alerts to the keeper from the browser", detail: "My loan page: one wallet signature, no gas. Tested against Circle's SDK: same signature and request", status: "built", tone: "good" },
     { part: "Borrow Kit integrator fee", detail: "Needs a Circle API key", status: "planned", tone: "" },
   ];
 

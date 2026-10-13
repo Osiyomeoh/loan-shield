@@ -24,9 +24,11 @@ function notification(fields: { eventId?: string; wallet?: string; threshold?: s
   });
 }
 
+const STRANGER = { borrower: "0x9999999999999999999999999999999999999999", marketId: TUNDE.marketId } as const;
+
 function deps(chain: FakeChain, watch = [TUNDE]): WebhookDeps & { lines: string[] } {
   const lines: string[] = [];
-  return { chain, watch, seen: new RecentIds(), send: true, log: (l) => lines.push(l), lines };
+  return { chain, watch, markets: [TUNDE.marketId], seen: new RecentIds(), send: true, log: (l) => lines.push(l), lines };
 }
 
 test("claim 9: a forged 'LIQUIDATABLE' notification sends nothing while the chain says healthy", async () => {
@@ -37,12 +39,68 @@ test("claim 9: a forged 'LIQUIDATABLE' notification sends nothing while the chai
   assert.match(res.body.results![0]!, /healthy/);
 });
 
-test("claim 9: a notification naming another wallet can't redirect the keeper", async () => {
-  const stranger = "0x9999999999999999999999999999999999999999";
-  // The stranger's loan would be "Ready" if anyone asked, but it isn't on this keeper's watch list.
-  const chain = new FakeChain({ [TUNDE.borrower]: healthy, [stranger]: inDanger });
-  await handleWebhook(notification({ wallet: stranger, threshold: "LIQUIDATABLE" }), deps(chain));
+test("claim 9: a forged alert naming a wallet without a policy only reads the chain", async () => {
+  const chain = new FakeChain({ [TUNDE.borrower]: healthy }); // the stranger has no policy: preview says NoPolicy
+  const res = await handleWebhook(notification({ wallet: STRANGER.borrower, threshold: "LIQUIDATABLE" }), deps(chain));
+  assert.equal(res.status, 200);
   assert.equal(chain.sent.length, 0);
+  assert.match(res.body.results![1]!, /NoPolicy, no rescue/);
+});
+
+test("claim 9: a forged 'LIQUIDATABLE' alert naming a healthy protected wallet sends nothing", async () => {
+  const chain = new FakeChain({ [TUNDE.borrower]: healthy, [STRANGER.borrower]: healthy });
+  await handleWebhook(notification({ wallet: STRANGER.borrower, threshold: "LIQUIDATABLE" }), deps(chain));
+  assert.equal(chain.sent.length, 0);
+});
+
+test("an alert for a wallet outside the watch list rescues its loan when the contract says Ready", async () => {
+  const chain = new FakeChain({ [TUNDE.borrower]: healthy, [STRANGER.borrower]: inDanger });
+  const res = await handleWebhook(notification({ wallet: STRANGER.borrower, threshold: "URGENT" }), deps(chain));
+  assert.equal(res.status, 200);
+  assert.deepEqual(chain.sent, [STRANGER]);
+  assert.equal(res.body.results!.length, 2, "the watch list and the alert's wallet");
+});
+
+test("the alert's wallet is checked in every configured market", async () => {
+  const other = "0x00000000000000000000000000000000000000000000000000000000000000aa" as const;
+  const res = await handleWebhook(notification({ wallet: STRANGER.borrower }), {
+    ...deps(new FakeChain(), []),
+    markets: [TUNDE.marketId, other],
+  });
+  assert.deepEqual(res.body.results, [
+    `${STRANGER.borrower} in ${TUNDE.marketId.slice(0, 10)}…: NoPolicy, no rescue`,
+    `${STRANGER.borrower} in ${other.slice(0, 10)}…: NoPolicy, no rescue`,
+  ]);
+});
+
+test("with no alert markets configured, only the watch list is checked", async () => {
+  const chain = new FakeChain({ [TUNDE.borrower]: healthy, [STRANGER.borrower]: inDanger });
+  const res = await handleWebhook(notification({ wallet: STRANGER.borrower }), { ...deps(chain), markets: [] });
+  assert.equal(chain.sent.length, 0);
+  assert.equal(res.body.results!.length, 1);
+});
+
+test("a wallet on the watch list is checked once, however the alert spells it", async () => {
+  const watched = { borrower: "0xAbCdEf0000000000000000000000000000000001", marketId: TUNDE.marketId } as const;
+  for (const wallet of [watched.borrower, watched.borrower.toLowerCase()]) {
+    const res = await handleWebhook(notification({ wallet }), deps(new FakeChain(), [watched]));
+    assert.equal(res.body.results!.length, 1, wallet);
+  }
+});
+
+test("an alert whose walletAddress isn't an address checks only the watch list", async () => {
+  const chain = new FakeChain({ [TUNDE.borrower]: healthy });
+  for (const wallet of ["0xnope", "", "1111111111111111111111111111111111111111"]) {
+    const res = await handleWebhook(notification({ wallet }), { ...deps(chain), watch: [ADA] });
+    assert.equal(res.body.results!.length, 1, wallet);
+  }
+});
+
+test("a dust rescue under the keeper's minimum is skipped", async () => {
+  const chain = new FakeChain({ [STRANGER.borrower]: { ...inDanger, repayAssets: 9_999n } });
+  const res = await handleWebhook(notification({ wallet: STRANGER.borrower }), { ...deps(chain, []), minRepay: 10_000n });
+  assert.equal(chain.sent.length, 0);
+  assert.match(res.body.results![0]!, /repays 0\.009999 USDC, under this keeper's 0\.01 USDC minimum, not sent/);
 });
 
 test("claim 9: garbage, arrays and non-JSON bodies are rejected without touching the chain", async () => {
@@ -78,6 +136,16 @@ test("a redelivered event_id is handled once", async () => {
   const again = await handleWebhook(body, d);
   assert.equal(again.body.duplicate, true);
   assert.equal(chain.sent.length, 1);
+});
+
+test("a forged alert reusing a real event_id with another wallet doesn't mark the real alert handled", async () => {
+  const chain = new FakeChain({ [STRANGER.borrower]: inDanger });
+  const d = deps(chain, []);
+  const eventId = "6b2e8d1f-3c4a-5f7b-8e9d-1a2b3c4d5e6f";
+  await handleWebhook(notification({ eventId, wallet: TUNDE.borrower }), d); // forged: same id, other wallet
+  const real = await handleWebhook(notification({ eventId, wallet: STRANGER.borrower }), d);
+  assert.equal(real.body.duplicate, undefined);
+  assert.deepEqual(chain.sent, [STRANGER]);
 });
 
 test("an event_id is only recorded after a successful check, so a failed one is retried", async () => {

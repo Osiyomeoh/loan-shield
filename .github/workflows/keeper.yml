@@ -1,0 +1,59 @@
+name: keeper sweep
+
+# The hosted keeper's backup: find every loan with a LoanShield policy from the contract's own events, check each
+# one on-chain and rescue those the contract says are due (app/scripts/sweep.ts). Every 5 minutes, GitHub's shortest
+# schedule; GitHub may start scheduled runs late, or drop them, when Actions is under heavy load.
+# Sends only if the repository secret KEEPER_PRIVATE_KEY holds a gas-only keeper wallet's key; without it, it reports.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keeper-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SHIELD_ADDRESS: "0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04"
+      SWEEP_STATE: .sweep-state.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      # The policies found so far and the next block to scan, so each run only reads the blocks since the last one.
+      - name: Restore the scan position
+        uses: actions/cache/restore@v4
+        with:
+          path: app/.sweep-state.json
+          key: sweep-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: sweep-
+
+      - name: Sweep
+        working-directory: app
+        env:
+          KEEPER_PRIVATE_KEY: ${{ secrets.KEEPER_PRIVATE_KEY }}
+        run: npm run sweep
+
+      - name: Save the scan position
+        if: always() && hashFiles('app/.sweep-state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: app/.sweep-state.json
+          key: sweep-${{ github.run_id }}-${{ github.run_attempt }}

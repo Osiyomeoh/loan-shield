@@ -228,7 +228,7 @@ export default function Developers() {
               <KeeperStatus />
             </div>
             <p className="muted">
-              <code>/api/webhook</code> takes Borrow Kit's <code>morpho.healthBandCrossed</code> alerts. The payload only wakes it: it re-reads the chain and makes the same decision as the keeper, so a forged alert can't cause a rescue the chain doesn't justify (<Ext href={`${REPO}/blob/main/CLAIMS.md`}>claim 9</Ext>).
+              <code>/api/webhook</code> takes Borrow Kit's <code>morpho.healthBandCrossed</code> alerts. Any owner can send their loan's alerts here from My loan. The payload only names a wallet to check: the receiver re-reads the chain and makes the same decision as the keeper, so a forged alert can't cause a rescue the chain doesn't justify (<Ext href={`${REPO}/blob/main/CLAIMS.md`}>claim 9</Ext>). A sweep every 5 minutes checks every protected loan as a backstop.
             </p>
             <div className="btn-row" style={{ marginTop: 18 }}>
               <Ext href={`${REPO}/tree/main/test`} className="btn ghost sm">

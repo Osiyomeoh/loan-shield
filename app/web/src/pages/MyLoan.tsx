@@ -218,7 +218,7 @@ function OwnerView({ loan, account }: { loan: Loan; account: string }) {
           owner={
             <>
               {controls}
-              <WhoWatches loan={loan} demo={demo} />
+              <WhoWatches loan={loan} account={account} />
             </>
           }
           hideKeeper

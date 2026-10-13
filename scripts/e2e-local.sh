@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end run of the TypeScript app against a LOCAL fork of Arc mainnet: no money, no real keys.
 # Opens a real loan in the real USDC/cirBTC Morpho market with throwaway keys, deploys LoanShield, then runs the
-# same `protect`, `keeper` and `status` scripts used on mainnet plus the webhook handler, and checks what they did
-# on-chain.
+# same `protect`, `keeper`, `sweep` and `status` scripts used on mainnet plus the webhook and stats handlers, and
+# checks what they did on-chain.
 # Needs Arc Foundry (arc-anvil, arc-cast) on PATH, `npm ci` in app/, and network access to the Arc mainnet RPC (the
 # fork reads from it; two checks read it directly). Usage: scripts/e2e-local.sh
 set -euo pipefail
@@ -73,15 +73,45 @@ run e2e/estimate-race.ts > "$TMP/race.txt"
 check "an exact gas estimate runs out of gas once accrual runs" "^round 1: .*: reverted" "$TMP/race.txt"
 check "sendRescue's headroom covers the accrual" "^round 2: .*: success, accrued interest" "$TMP/race.txt"
 
+# The hosted keeper's opt-in path: with an empty WATCH list, a Borrow Kit alert only names the wallet to check, and
+# the chain still decides (README, "Hosted keeper for every protected loan").
+WATCH= run e2e/post-webhook.ts optin-forged LIQUIDATABLE 0x0000000000000000000000000000000000000001 > "$TMP/optin-forged.txt"
+check "opt-in: a forged alert naming a wallet without a policy only reads" "^200 .*0x0000000000000000000000000000000000000001 in 0xc2db905f…: NoPolicy, no rescue" "$TMP/optin-forged.txt"
+# Three rescues have used most of the 400 USDC buffer; top it up so the next two rescues reach the target.
+run scripts/protect.ts 300 1.9 2.2 --yes > "$TMP/topup.txt"
+check "owner tops the buffer up by 300 USDC" "Rescue now\? NotInDanger" "$TMP/topup.txt"
+run e2e/borrow-more.ts 1.6 > "$TMP/borrow3.txt"
+check "borrower borrows more, back in danger" "HF [12]\.[0-9]{4} → 1\.[56][0-9]{3}" "$TMP/borrow3.txt"
+WATCH= run e2e/post-webhook.ts optin-1 URGENT "$BORROWER" > "$TMP/optin.txt"
+check "opt-in: an alert from a wallet outside WATCH gets its loan rescued" "^200 .*rescued, HF 1\.[0-9]{4} → 2\.2[0-9]{3}" "$TMP/optin.txt"
+
+# The backup sweep finds the loan from the shield's own events (no WATCH list), and remembers where it stopped.
+run e2e/borrow-more.ts 1.6 > "$TMP/borrow4.txt"
+check "borrower borrows more, back in danger" "HF [12]\.[0-9]{4} → 1\.[56][0-9]{3}" "$TMP/borrow4.txt"
+WATCH= KEEPER_PRIVATE_KEY= run scripts/sweep.ts > "$TMP/sweep-nokey.txt"
+check "sweep without a key finds the loan from events, reports, sends nothing" "rescue due \(HF 1\.[0-9]{4} → 2\.2[0-9]{3}\), not sent: no keeper key" "$TMP/sweep-nokey.txt"
+WATCH= SWEEP_STATE="$TMP/sweep.json" run scripts/sweep.ts > "$TMP/sweep1.txt"
+check "sweep finds 1 loan with a policy" "shield events\), 1 loan\(s\) with a policy" "$TMP/sweep1.txt"
+check "sweep rescues it" "rescued, HF 1\.[0-9]{4} → 2\.2[0-9]{3}" "$TMP/sweep1.txt"
+first_end="$(sed -nE 's/.*blocks [0-9]+–([0-9]+) .*/\1/p' "$TMP/sweep1.txt")"
+WATCH= SWEEP_STATE="$TMP/sweep.json" run scripts/sweep.ts > "$TMP/sweep2.txt"
+check "next sweep starts where the last one stopped" "blocks $((first_end + 1))–[0-9]+ \([0-9]+ shield events\), 1 loan\(s\) with a policy" "$TMP/sweep2.txt"
+check "next sweep finds it healthy and sends nothing" "healthy \(HF 2\.2[0-9]{3} ≥ trigger 1\.9000\)" "$TMP/sweep2.txt"
+
 arc-cast logs --from-block "$((FORK_BLOCK + 1))" --address "$SHIELD_ADDRESS" \
   'Rescued(address indexed,bytes32 indexed,address indexed,uint256,uint256,uint256,uint256)' --rpc-url "$ARC_RPC_URL" > "$TMP/logs.txt"
-[ "$(grep -c 'transactionHash' "$TMP/logs.txt")" = "3" ] && echo "PASS  exactly three Rescued events (keeper, webhook, race)" \
-  || { echo "FAIL  expected exactly three Rescued events"; cat "$TMP/logs.txt"; exit 1; }
+[ "$(grep -c 'transactionHash' "$TMP/logs.txt")" = "5" ] && echo "PASS  exactly five Rescued events (keeper, webhook, race, opt-in alert, sweep)" \
+  || { echo "FAIL  expected exactly five Rescued events"; cat "$TMP/logs.txt"; exit 1; }
+
+# The home page's totals (api/stats.ts), rebuilt from the same events.
+run e2e/get-stats.ts > "$TMP/stats.txt"
+check "stats: 1 loan protected, 5 rescues" '^200 .*"loansProtected":1,"policies":1,.*"rescues":5' "$TMP/stats.txt"
+check "stats: USDC on standby equals the buffer on chain" "^standby .*: match$" "$TMP/stats.txt"
 
 # The web page's reader (app/public/shield.js), through the same JSON-RPC calls a browser makes.
 run e2e/web-read.ts > "$TMP/web.txt"
 check "web reader: rescue simulation reverts NotInDanger" "simulate: reverts NotInDanger\(2\.2[0-9]{3}, 1\.9000\)" "$TMP/web.txt"
-check "web reader: finds all three rescues from the deploy block" "history: 3 rescue\(s\)" "$TMP/web.txt"
+check "web reader: finds all five rescues from the deploy block" "history: 5 rescue\(s\)" "$TMP/web.txt"
 check "web reader: loan state" "loan: HF 2\.2[0-9]{3}, buffer [0-9.,]+ USDC, policy 1\.9000 → 2\.2000, preview NotInDanger" "$TMP/web.txt"
 cat "$TMP/web.txt"
 
