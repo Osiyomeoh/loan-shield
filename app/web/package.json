@@ -25,6 +25,7 @@
     "@types/react-dom": "19.1.6",
     "@types/three": "0.177.0",
     "@vitejs/plugin-react": "4.5.2",
+    "playwright-core": "1.63.0",
     "typescript": "5.9.3",
     "vite": "6.3.5"
   }

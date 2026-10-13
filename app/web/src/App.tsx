@@ -6,7 +6,8 @@ import { Footer } from "./components/Footer";
 import { Nav } from "./components/Nav";
 import Home from "./pages/Home";
 
-const Dashboard = lazy(() => import("./pages/Dashboard"));
+const MyLoan = lazy(() => import("./pages/MyLoan"));
+const Demo = lazy(() => import("./pages/Demo"));
 const HowItWorks = lazy(() => import("./pages/HowItWorks"));
 const Compare = lazy(() => import("./pages/Compare"));
 const Market = lazy(() => import("./pages/Market"));
@@ -32,7 +33,8 @@ function Shell() {
           <Suspense fallback={<div className="page-loading" aria-busy="true" />}>
             <Routes location={location}>
               <Route path="/" element={<Home />} />
-              <Route path="/app" element={<Dashboard />} />
+              <Route path="/app" element={<MyLoan />} />
+              <Route path="/demo" element={<Demo />} />
               <Route path="/how-it-works" element={<HowItWorks />} />
               <Route path="/compare" element={<Compare />} />
               <Route path="/market" element={<Market />} />

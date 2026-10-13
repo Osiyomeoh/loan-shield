@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as web from "../public/shield.js";
 import { compact, dollars, drop, hfText, short, usd, usdc, wadNumber } from "../web/src/lib/format.js";
-import { compareRows, coverage, headline, ladder, ltvText, steps, verdict, type LoanState, type MarketState } from "../web/src/lib/view.js";
+import { compareRows, coverage, GAS_RESERVE, headline, ladder, ltvText, PRESETS, protectPreview, spendable, steps, suggestedTopUp, verdict, type LoanState, type MarketState } from "../web/src/lib/view.js";
 import { WAD } from "./fakes.js";
 
 const PRICE = 100_000;
@@ -138,4 +138,58 @@ test("compareRows and ltvText use Morpho's incentive and the market's LLTV", () 
   assert.equal(compareRows(loan({ trigger: 0n }), market)[0]!.us, "Never (no policy)");
   assert.equal(ltvText(loan(), market, PRICE), "LTV 50.0% of 86% max");
   assert.equal(ltvText(loan({ debt: 0n }), market, PRICE), "no loan");
+});
+
+test("presets are valid policies, and Balanced is the demo loan's 1.30 → 1.80", () => {
+  for (const p of PRESETS) assert.equal(web.policyError(p.trigger, p.target), undefined, p.key);
+  const balanced = PRESETS.find((p) => p.key === "balanced")!;
+  assert.deepEqual([balanced.trigger, balanced.target], [(WAD * 13n) / 10n, (WAD * 18n) / 10n]);
+});
+
+test("spendable keeps 0.10 USDC for gas; suggestedTopUp fills the first rescue to the cent", () => {
+  assert.equal(GAS_RESERVE, 100_000n);
+  assert.equal(spendable(5n * USDC), 4_900_000n);
+  assert.equal(spendable(50_000n), 0n);
+  // 1,000 USDC of debt, 1.30 → 1.80: the first rescue needs 277.777778 USDC.
+  const [trigger, target] = [(WAD * 13n) / 10n, (WAD * 18n) / 10n];
+  assert.equal(suggestedTopUp({ debt: 1_000n * USDC, buffer: 0n }, trigger, target), 277_780_000n, "rounded up to the cent");
+  assert.equal(suggestedTopUp({ debt: 1_000n * USDC, buffer: 200n * USDC }, trigger, target), 77_780_000n);
+  assert.equal(suggestedTopUp({ debt: 1_000n * USDC, buffer: 300n * USDC }, trigger, target), 0n);
+  assert.equal(suggestedTopUp({ debt: 0n, buffer: 0n }, trigger, target), 0n);
+});
+
+test("protectPreview: where rescues start, what each repays, and where liquidation moves", () => {
+  const s = loan();
+  const next = { buffer: 300n * USDC, trigger: s.trigger, target: s.target };
+  const p = protectPreview(s, PRICE, next)!;
+  assert.deepEqual(
+    p.rows.map((r) => [r.label, r.value]),
+    [
+      ["Rescues start", "BTC $75,581"],
+      ["Each rescue", "Back to 1.80"],
+      ["Liquidation", "BTC $40,698"],
+    ],
+    "the same prices the dashboard's ladder shows for this loan",
+  );
+  assert.match(p.rows[1]!.sub, /the first repays about 277\.77 USDC$/);
+  assert.match(p.rows[2]!.sub, /\$58,140 without the shield/);
+  assert.equal(p.warning, undefined);
+
+  const thin = protectPreview(s, PRICE, { ...next, buffer: 100n * USDC })!;
+  assert.match(thin.rows[1]!.sub, /about 100\.00 USDC, 177\.77 USDC short of a full rescue/);
+
+  const empty = protectPreview(s, PRICE, { ...next, buffer: 0n })!;
+  assert.equal(empty.rows[2]!.value, "BTC $58,140", "no buffer, no change to liquidation");
+  assert.match(empty.warning!, /empty buffer/);
+
+  const covered = protectPreview(s, PRICE, { ...next, buffer: 1_500n * USDC })!;
+  assert.equal(covered.rows[2]!.tone, "good");
+
+  // HF 1.72 with a 2.0 trigger: due at once, and the first rescue lifts from 1.72, not from the trigger.
+  const early = protectPreview(s, PRICE, { buffer: 300n * USDC, trigger: 2n * WAD, target: (WAD * 25n) / 10n })!;
+  assert.equal(early.rows[0]!.value, "Right away");
+  assert.match(early.rows[1]!.sub, /about 300\.00 USDC, 12\.0000 USDC short/);
+  assert.match(early.warning!, /already below this trigger/);
+
+  assert.equal(protectPreview(loan({ debt: 0n, healthFactor: web.MAX_UINT256 }), PRICE, next), undefined);
 });

@@ -108,7 +108,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
     q: "Do I need a wallet to use this site?",
     a: (
       <>
-        Not to read: it reads the chain over Arc's public RPC. Protection is turned on from the command line today, with <code>npm run protect -- &lt;buffer usdc&gt; &lt;trigger&gt; &lt;target&gt;</code>, which signs with your own key and sends nothing without <code>--yes</code>. Doing this in the browser isn't built yet.
+        Not to read: it reads the chain over Arc's public RPC. To protect your own loan, connect the wallet that borrowed on <Link to="/app" className="link">My loan</Link>. The page builds each transaction (a USDC approval for the exact amount, the deposit, the policy), checks it would succeed, and hands it to your wallet to show and sign. The site never sees a key. The command line works too: <code>npm run protect -- &lt;buffer usdc&gt; &lt;trigger&gt; &lt;target&gt;</code> sends nothing without <code>--yes</code>.
       </>
     ),
   },
@@ -132,7 +132,7 @@ export default function HowItWorks() {
     webhook,
     { part: "register-webhook script (Borrow Kit)", detail: "Ran on Arc mainnet 2026-10-13: the demo loan's health-band alerts go to the hosted webhook", status: "done", tone: "good" },
     { part: "Source verified on explorer.arc.io", detail: "Not done yet", status: "planned", tone: "" },
-    { part: "Turning protection on in the browser", detail: "Use npm run protect for now", status: "planned", tone: "" },
+    { part: "Turning protection on in the browser", detail: "My loan page: connect a wallet, and it signs each step. Tested end to end on a local fork of Arc mainnet", status: "built", tone: "good" },
     { part: "Watch list kept in storage, for many users", detail: "A webhook wakes one deployment's keeper for the loans in its WATCH list", status: "planned", tone: "" },
     { part: "Borrow Kit integrator fee", detail: "Needs a Circle API key", status: "planned", tone: "" },
   ];
@@ -256,10 +256,10 @@ export default function HowItWorks() {
         </Reveal>
         <div className="btn-row" style={{ marginTop: 32 }}>
           <Link to="/app" className="btn primary">
-            See the live demo loan <IconArrow />
+            Protect my loan <IconArrow />
           </Link>
-          <Link to="/developers" className="btn ghost">
-            For developers
+          <Link to="/demo" className="btn ghost">
+            See the live demo loan
           </Link>
         </div>
       </section>

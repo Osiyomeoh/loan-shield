@@ -8,7 +8,7 @@ Arc's Borrow Kit lends USDC against cirBTC through Morpho Blue. When the loan's 
 
 **What it uses Arc for:** the Borrow Kit loan and its Morpho Blue market on Arc mainnet, USDC as both the loan token and the gas token (a rescue costs under 0.004 USDC), Borrow Kit health-band webhooks to wake the keeper, Swap Kit to buy the demo cirBTC, and Arc Foundry to test against Arc mainnet's real state.
 
-**Live on Arc mainnet:** [the page](https://loan-shield-theta.vercel.app) (reads the chain directly, no wallet needed) · [LoanShield contract](https://explorer.arc.io/address/0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04) · [the live rescue](https://explorer.arc.io/tx/0x6a2633b3fe07f715a94da58e37e00fe903eb02ee986c9775a44fd0ea491cea3f) · [every transaction](#live-on-arc-mainnet)
+**Live on Arc mainnet:** [the page](https://loan-shield-theta.vercel.app) (reads the chain directly with no wallet; connect one to protect your own loan) · [LoanShield contract](https://explorer.arc.io/address/0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04) · [the live rescue](https://explorer.arc.io/tx/0x6a2633b3fe07f715a94da58e37e00fe903eb02ee986c9775a44fd0ea491cea3f) · [every transaction](#live-on-arc-mainnet)
 
 ## Status
 
@@ -17,11 +17,12 @@ Arc's Borrow Kit lends USDC against cirBTC through Morpho Blue. When the loan's 
 | Part | Status |
 |---|---|
 | `LoanShield.sol` contract | **built**. 39 tests: unit, fuzz, invariant, and fork tests against the real Arc mainnet market |
-| Keeper (polling) and webhook receiver (`app/`) | **built**. Unit tested (the app suite is 45 tests: keeper, webhook, the chain reader and the site's display helpers), plus end to end on a local fork of Arc mainnet |
+| Keeper (polling) and webhook receiver (`app/`) | **built**. Unit tested (the app suite is 55 tests: keeper, webhook, the chain reader, the owner's transactions and the site's display helpers), plus end to end on a local fork of Arc mainnet |
 | End-to-end run on a local fork (`scripts/e2e-local.sh`) | **built**. 21 checks: a real loan in the real cirBTC market, rescued by the keeper and by the webhook, each exactly once |
 | Circle Kit scripts: `buy-cirbtc` (Swap Kit), `open-loan` and `register-webhook` (Borrow Kit), and the Borrow Kit column of `status` | `buy-cirbtc` and `open-loan` **ran on Arc mainnet** on 2026-10-13 and opened the demo loan ([transactions](#live-on-arc-mainnet)), and the Borrow Kit column of `status` read it back. `register-webhook` **ran on Arc mainnet** on 2026-10-13: Borrow Kit confirmed the demo loan's health-band notifications go to the hosted [`/api/webhook`](https://loan-shield-theta.vercel.app/api/webhook). These scripts call Circle's live services, which a local fork can't provide |
-| Web site (`app/web/`, React) | **built**. Six pages, dark and light themes. `npm run build` typechecks and builds it, and CI runs that too. The display helpers have 8 unit tests. Checked against Arc mainnet and a local fork, at desktop and phone width, in both themes |
-| CI (`.github/workflows/ci.yml`) | **passes** on GitHub Actions: contracts 39/39, app 45/45, the web build and the end-to-end run. First green on 2026-10-12 (run 38317984750), latest on 2026-10-13 (run 38371879121) |
+| Web site (`app/web/`, React) | **built**. Seven pages, dark and light themes. `npm run build` typechecks and builds it, and CI runs that too. The display helpers have 11 unit tests. Checked against Arc mainnet and a local fork, at desktop and phone width, in both themes |
+| Turning protection on in the browser (`/app`, My loan) | **built**. Connect a wallet and the page finds its loan, then sends `approve`, `deposit`, `setPolicy`, `withdraw` and `clearPolicy` through that wallet, each simulated first; the site never holds a key. `scripts/e2e-browser.sh` drives it in Chrome against a local fork: 22 checks, each owner action verified on-chain. Not yet run on mainnet with a real wallet extension. The hosted keeper watches only the demo loan, so a newly protected loan needs its own keeper for now; the page says so and gives the command |
+| CI (`.github/workflows/ci.yml`) | **passes** on GitHub Actions: contracts 39/39, app 45/45, the web build and the end-to-end run. First green on 2026-10-12 (run 38317984750), latest on 2026-10-13 (run 38371879121, before the My loan page and its 10 new tests). CI doesn't run the browser end-to-end check |
 | Deployed on Arc mainnet | **deployed** 2026-10-13 at [`0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04`](https://explorer.arc.io/address/0x11f86Cb8cc778C6a082CA7Ac2E5dD6faaC408b04). Its runtime code matches this repo's build byte for byte, apart from the two constructor addresses |
 | Source verified on explorer.arc.io | **planned** |
 | Live mainnet rescue | **done** 2026-10-13: the keeper's [`0x6a26…ea3f`](https://explorer.arc.io/tx/0x6a2633b3fe07f715a94da58e37e00fe903eb02ee986c9775a44fd0ea491cea3f) repaid 1.253229 USDC of the demo loan from its buffer, HF 1.236 → 1.800. Borrow Kit's `getLoans` agrees: HF 1.79999 (SAFE), liquidation price $46,552 |
@@ -106,7 +107,7 @@ You need [Arc Foundry](https://github.com/circlefin/arc-foundry) v0.8.0-2 (`arc-
 # Contracts: 39 tests. The fork tests read Arc mainnet at a pinned block through the public RPC.
 arc-forge test
 
-# App: typecheck and 45 unit tests (keeper, webhook, the chain reader, the site's display helpers, ABI drift)
+# App: typecheck and 55 unit tests (keeper, webhook, the chain reader, the owner's transactions, the site's display helpers, ABI drift)
 cd app && npm ci && npm run typecheck && npm test
 
 # Web site: typecheck and production build into app/web/dist
@@ -115,6 +116,11 @@ cd app/web && npm ci && npm run build
 # End to end, 21 checks. Forks Arc mainnet locally, opens a real loan in the real cirBTC market with throwaway
 # keys, deploys LoanShield, then runs the same protect / keeper / webhook / status code used on mainnet.
 scripts/e2e-local.sh
+
+# The My loan page in Chrome, 22 checks. Same kind of fork and a fresh loan, driven through a test wallet that
+# forwards to it: connect, protect, withdraw, change the policy, add, turn off, each checked on-chain.
+# Needs Google Chrome and npm ci in app/web. Pass a directory to also save screenshots.
+scripts/e2e-browser.sh
 
 # Read-only against Arc mainnet: live market data, the RPC's eth_getLogs limit, archive state
 cd app && npx tsx e2e/mainnet-read.ts
@@ -132,11 +138,13 @@ What the end-to-end run checks, in order:
 
 ## Web site
 
-`app/web/` is a React app (Vite and React Router) with six pages: `/` (overview), `/app` (live dashboard), `/how-it-works`, `/compare` (each competitor fact links its source), `/market` (live market figures and a loan planner) and `/developers`. It has dark and light themes and a 3D hero built with three.js, which loads lazily. Every chain read goes through `app/public/shield.js`, the dependency-free reader the tests check. Vite bundles it into the site and also serves it on its own at `/shield.js`.
+`app/web/` is a React app (Vite and React Router) with seven pages: `/` (overview), `/app` (My loan: connect a wallet to protect and manage your loan), `/demo` (the live demo loan, read-only), `/how-it-works`, `/compare` (each competitor fact links its source), `/market` (live market figures and a loan planner) and `/developers`. It has dark and light themes and a 3D hero built with three.js, which loads lazily. Every chain read goes through `app/public/shield.js`, the dependency-free reader the tests check. Vite bundles it into the site and also serves it on its own at `/shield.js`.
 
-The dashboard shows the loan's live health factor against its trigger, target and liquidation point. It also shows the buffer, the policy, every rescue with links to explorer.arc.io, and whether a rescue would run right now. It gets that last answer from an `eth_call` of `rescue`, and it decodes the revert, such as `NotInDanger(health factor, trigger)`. The site has no wallet connection and makes no writes. The photos of people are Unsplash stock, credited where they appear; they illustrate use cases and aren't customers.
+A loan's page shows its live health factor against its trigger, target and liquidation point. It also shows the buffer, the policy, every rescue with links to explorer.arc.io, and whether a rescue would run right now. It gets that last answer from an `eth_call` of `rescue`, and it decodes the revert, such as `NotInDanger(health factor, trigger)`. Reading needs no wallet anywhere on the site. The photos of people are Unsplash stock, credited where they appear; they illustrate use cases and aren't customers.
 
-Which loan the dashboard shows comes from URL parameters: `?shield=0x…&borrower=0x…` (and optionally `&market=0x…`). The defaults are the live shield and the demo loan. To look at a loan on a local fork (for example one made by `e2e/setup-local-loan.ts` against `arc-anvil`), run the dev server and add `rpc`:
+My loan (`/app`) is where a borrower turns protection on. It lists the browser's wallets (EIP-6963, with `window.ethereum` as a fallback). Once one connects, the page reads that address's loan and asks the wallet to switch to Arc if it's on another network. Then it offers one form: how much standby USDC to deposit, prefilled with what the first rescue would repay, and when to rescue (three presets, or custom numbers checked against `setPolicy`'s bounds before anything is sent). Beside it, it shows where rescues would start and where liquidation would move. Review lists the transactions: an `approve` for exactly the amount, `deposit`, and `setPolicy`. Each is simulated with `eth_call`, then sent by the wallet, which shows and signs it; the site never sees a key. Once a loan is protected, the same place offers Add USDC, Withdraw, Change policy and Turn off. Any other address opens read-only.
+
+Which loan `/app` shows comes from URL parameters: `?borrower=0x…` (otherwise the connected wallet's), `&shield=0x…` and optionally `&market=0x…`. The defaults are the live shield and the cirBTC market; `/demo` always shows the demo loan. To look at a loan on a local fork (for example one made by `e2e/setup-local-loan.ts` against `arc-anvil`), run the dev server and add `rpc`:
 
 ```sh
 cd app/web && npm ci && npm run dev
@@ -213,7 +221,7 @@ Each comment sits on its own line because zsh, macOS's default shell, doesn't tr
 
 - A rescue needs USDC in the buffer. A partial rescue happens if the buffer runs short, and `EmptyBuffer` if it is empty. The page shows the buffer next to the debt.
 - The keeper must be running, or the webhook reachable, for a rescue to happen in time. Because `rescue` is permissionless, any number of independent keepers can watch the same loan.
-- A webhook only wakes one deployment's keeper for the loans in its `WATCH` list. Serving many users needs a watch list kept in storage, which is planned.
+- A webhook only wakes one deployment's keeper for the loans in its `WATCH` list. Serving many users needs a watch list kept in storage, which is planned. Until then, a loan protected on My loan needs a keeper of its own (anyone can send `rescue`); the page says so and gives the command.
 - **Next:** Borrow Kit lets an integrator charge an origination fee and keep 90% of it ([borrow fees](https://docs.arc.io/app-kit/concepts/borrow-fees)). A wallet that adds Loan Shield can offer loans that don't get liquidated while you sleep and earn that fee. The same contract already covers every USDC market on Arc's Morpho deployment, such as USDC/XAUM at LLTV 0.77, where the liquidation bonus is 7.41%.
 
 ## Repo layout
@@ -229,7 +237,9 @@ app/api/webhook.ts              Vercel function for Borrow Kit notifications
 app/web/                        the React site: pages, components and display helpers
 app/public/                     the dependency-free chain reader (shield.js), also served at /shield.js
 app/e2e/                        local-fork helpers and the read-only mainnet check
+app/web/e2e/                    the browser check of My loan (Playwright, Chrome)
 scripts/e2e-local.sh            the end-to-end run
+scripts/e2e-browser.sh          the browser end-to-end run of My loan
 scripts/verify-submission.sh    pre-submission checks (repo, claims, secrets, live deployment)
 ```
 

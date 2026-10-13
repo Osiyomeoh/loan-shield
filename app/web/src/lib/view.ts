@@ -175,3 +175,64 @@ export function ltvText(s: LoanState, m: MarketState, price: number): string {
   const btc = Number(s.collateral) / 10 ** m.collateralDecimals;
   return `LTV ${((Number(s.debt) / 10 ** m.loanDecimals / (btc * price)) * 100).toFixed(1)}% of ${(Number(m.lltv) / 1e16).toFixed(0)}% max`;
 }
+
+// ── Turning protection on ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** USDC left in the wallet for gas when the form offers "Max": Arc's gas is the same USDC. */
+export const GAS_RESERVE = 100_000n;
+
+const wad = (x: string) => web.parseUnits(x, 18);
+/** Ready-made policies: rescue below the trigger, back up to the target. Balanced is the demo loan's. */
+export const PRESETS = [
+  { key: "early", name: "Early", trigger: wad("1.5"), target: wad("2"), note: "Acts sooner, repays more each time" },
+  { key: "balanced", name: "Balanced", trigger: wad("1.3"), target: wad("1.8"), note: "The demo loan's policy" },
+  { key: "late", name: "Late", trigger: wad("1.15"), target: wad("1.5"), note: "Waits longer, repays less each time" },
+] as const;
+
+/** What the owner can deposit while keeping GAS_RESERVE for gas. */
+export const spendable = (balance: bigint) => (balance > GAS_RESERVE ? balance - GAS_RESERVE : 0n);
+
+/** USDC to add so the buffer covers the first rescue under this policy, rounded up to the cent; 0 if it already does. */
+export function suggestedTopUp(s: Pick<LoanState, "debt" | "buffer">, trigger: bigint, target: bigint): bigint {
+  const need = web.repayToTarget(s.debt, trigger, target);
+  if (need <= s.buffer) return 0n;
+  return ((need - s.buffer + 9_999n) / 10_000n) * 10_000n;
+}
+
+export type PlanRow = { label: string; value: string; sub: string; tone: Tone };
+
+/** The loan under a new buffer and policy, for the form's preview. Undefined when there is no debt to protect. */
+export function protectPreview(
+  s: Pick<LoanState, "debt" | "healthFactor">,
+  price: number,
+  next: { buffer: bigint; trigger: bigint; target: bigint },
+): { rows: PlanRow[]; warning?: string } | undefined {
+  const o = web.outlook({ ...s, ...next }, price);
+  if (!o || o.rescuePrice === undefined) return undefined;
+  const dueNow = s.healthFactor < next.trigger;
+  const first = dueNow ? web.repayToTarget(s.debt, s.healthFactor, next.target) : o.needed;
+  const repay = first < next.buffer ? first : next.buffer;
+  const rows: PlanRow[] = [
+    dueNow
+      ? { label: "Rescues start", value: "Right away", sub: `health factor ${hfText(s.healthFactor)} is already below ${hfText(next.trigger)}`, tone: "warn" }
+      : { label: "Rescues start", value: `BTC ${usd(o.rescuePrice)}`, sub: `${drop(o.rescuePrice, price)} from today, at health factor ${hfText(next.trigger)}`, tone: "warn" },
+    {
+      label: "Each rescue",
+      value: `Back to ${hfText(next.target)}`,
+      sub: next.buffer === 0n ? "but the buffer is empty" : `the first repays about ${usdc(repay)}${first > next.buffer ? `, ${usdc(first - next.buffer)} short of a full rescue` : ""}`,
+      tone: "",
+    },
+    o.protectedPrice === 0
+      ? { label: "Liquidation", value: "Not while rescues keep up", sub: `the buffer covers the whole debt; without it, BTC ${usd(o.liquidationPrice)}`, tone: "good" }
+      : next.buffer === 0n
+        ? { label: "Liquidation", value: `BTC ${usd(o.liquidationPrice)}`, sub: `${drop(o.liquidationPrice, price)}: unchanged until the buffer has USDC`, tone: "bad" }
+        : { label: "Liquidation", value: `BTC ${usd(o.protectedPrice)}`, sub: `${drop(o.protectedPrice, price)} once the buffer is spent; ${usd(o.liquidationPrice)} without the shield`, tone: "bad" },
+  ];
+  const warning =
+    next.buffer === 0n
+      ? "With an empty buffer a rescue has nothing to repay with. Add USDC to make the policy do anything."
+      : dueNow
+        ? `Your health factor (${hfText(s.healthFactor)}) is already below this trigger, so anyone can send a rescue as soon as protection is on.`
+        : undefined;
+  return { rows, warning };
+}

@@ -6,9 +6,11 @@ import { Brand } from "./Brand";
 import { IconClose, IconGithub, IconMenu } from "./Icons";
 import { LiveChip } from "./LiveChip";
 import { ThemeToggle } from "./ThemeToggle";
+import { WalletButton } from "./Wallet";
 
 export const NAV = [
-  { to: "/app", label: "Dashboard" },
+  { to: "/app", label: "My loan" },
+  { to: "/demo", label: "Live demo" },
   { to: "/how-it-works", label: "How it works" },
   { to: "/compare", label: "Compare" },
   { to: "/market", label: "Market" },
@@ -49,6 +51,7 @@ export function Nav() {
         </nav>
         <div className="nav-right">
           <span className="hide-sm"><LiveChip compact /></span>
+          <WalletButton />
           <ThemeToggle />
           <a className="icon-btn hide-xs" href={REPO} target="_blank" rel="noopener noreferrer" aria-label="Source on GitHub" title="Source on GitHub">
             <IconGithub width={18} height={18} />

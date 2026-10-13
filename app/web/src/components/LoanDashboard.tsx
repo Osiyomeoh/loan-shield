@@ -1,17 +1,17 @@
+// One loan, read live from Arc: the dashboard that the demo page, a looked-up address and the owner's own page share.
 import { motion } from "motion/react";
-import { useState, type FormEvent } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useState, type FormEvent, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router";
 import { DEFAULTS, onFork, rpc, rpcUrl, web } from "../config";
-import { CountUp } from "../components/CountUp";
-import { HealthRing } from "../components/HealthRing";
-import { IconArrow, IconBolt, IconCheck, IconCoins, IconPlay, IconShield, IconUsers } from "../components/Icons";
-import { Explorer } from "../components/Links";
-import { Reveal } from "../components/Reveal";
-import { Runway } from "../components/Runway";
+import { CountUp } from "./CountUp";
+import { HealthRing } from "./HealthRing";
+import { IconArrow, IconBolt, IconCheck, IconCoins, IconPlay, IconShield, IconUsers } from "./Icons";
+import { Explorer } from "./Links";
+import { Reveal } from "./Reveal";
+import { Runway } from "./Runway";
 import { dollars, hfText, short, usdc } from "../lib/format";
 import { isValidLoan, useKeeper, useLive, type Loan, type Rescue } from "../lib/live";
 import { compareRows, coverage, headline, ladder, ltvText, PILLS, steps, verdict, type LoanState, type MarketState, type Outlook } from "../lib/view";
-import { useTitle } from "../lib/useTitle";
 
 const SAFETY = [
   "USDC in the shield leaves only two ways: back to its owner, or as a repayment of the owner's own loan.",
@@ -20,16 +20,7 @@ const SAFETY = [
   "The contract has no owner, no pause and no upgrade path. Anyone can call a rescue, and no one can redirect the money.",
 ];
 
-function useLoanFromUrl(): Loan {
-  const [params] = useSearchParams();
-  return {
-    shield: params.get("shield") ?? DEFAULTS.shield,
-    borrower: params.get("borrower") ?? DEFAULTS.borrower,
-    market: params.get("market") ?? DEFAULTS.market,
-  };
-}
-
-function Hero({ loan, s, o, price, isDemo }: { loan: Loan; s: LoanState; o: Outlook | undefined; price: number; isDemo: boolean }) {
+function Hero({ loan, s, o, price, badge }: { loan: Loan; s: LoanState; o: Outlook | undefined; price: number; badge?: string }) {
   const v = verdict(s);
   const pill = PILLS[v];
   const { title, text } = headline(s, o, price, v);
@@ -37,7 +28,7 @@ function Hero({ loan, s, o, price, isDemo }: { loan: Loan; s: LoanState; o: Outl
     <section className={`card dash-hero ${pill.tone ? `s-${pill.tone}` : ""}`} aria-live="polite">
       <div>
         <span className={`pill ${pill.tone}`}>{pill.label}</span>
-        {isDemo && <span className="tag">Demo loan</span>}
+        {badge && <span className="tag">{badge}</span>}
         <motion.h1 key={title} className="headline" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
           {title}
         </motion.h1>
@@ -214,38 +205,51 @@ function Keeper() {
   );
 }
 
-function Lookup({ loan, open }: { loan: Loan; open: boolean }) {
-  const [, setParams] = useSearchParams();
+/** The address of a loan to look at, as a link: /app?borrower=… (plus ?shield, ?market and, on a fork, ?rpc). */
+export function loanLink(loan: Partial<Loan>) {
+  const q = new URLSearchParams();
+  if (loan.borrower) q.set("borrower", loan.borrower);
+  if (loan.shield && loan.shield.toLowerCase() !== DEFAULTS.shield.toLowerCase()) q.set("shield", loan.shield);
+  if (loan.market && loan.market.toLowerCase() !== DEFAULTS.market.toLowerCase()) q.set("market", loan.market);
+  if (onFork) q.set("rpc", rpcUrl);
+  return `/app?${q}`;
+}
+
+/** Look up any borrower's loan, read-only. The contract and market default to the live deployment. */
+export function Lookup({ loan, title = "Check any address", open = false }: { loan?: Loan; title?: string; open?: boolean }) {
+  const navigate = useNavigate();
   const [error, setError] = useState("");
   const submit = (ev: FormEvent<HTMLFormElement>) => {
     ev.preventDefault();
     const f = new FormData(ev.currentTarget);
-    const shield = String(f.get("shield") ?? "").trim();
     const borrower = String(f.get("borrower") ?? "").trim();
-    const market = String(f.get("market") ?? "").trim().toLowerCase();
-    const bad = !web.isAddress(shield) ? "Contract must be a 0x address." : !web.isAddress(borrower) ? "Borrower must be a 0x address." : !web.isBytes32(market) ? "Market id must be 32 bytes of hex." : "";
+    const shield = String(f.get("shield") ?? "").trim() || DEFAULTS.shield;
+    const market = (String(f.get("market") ?? "").trim() || DEFAULTS.market).toLowerCase();
+    const bad = !web.isAddress(borrower) ? "Enter a wallet address: 0x and 40 hex characters." : !web.isAddress(shield) ? "The contract must be a 0x address." : !web.isBytes32(market) ? "The market id must be 32 bytes of hex." : "";
     setError(bad);
-    if (bad) return;
-    const q = new URLSearchParams({ shield, borrower, market });
-    if (onFork) q.set("rpc", rpcUrl);
-    setParams(q);
+    if (!bad) navigate(loanLink({ borrower, shield, market }));
   };
   return (
     <details className="card" open={open}>
-      <summary>Check another protected loan</summary>
-      <form className="lookup" onSubmit={submit} key={`${loan.shield}${loan.borrower}${loan.market}`}>
-        <label>
-          Loan Shield contract
-          <input name="shield" defaultValue={loan.shield} placeholder="0x…" spellCheck={false} autoComplete="off" />
-        </label>
-        <label>
-          Borrower
-          <input name="borrower" defaultValue={loan.borrower} placeholder="0x…" spellCheck={false} autoComplete="off" />
-        </label>
+      <summary>{title}</summary>
+      <form className="lookup" onSubmit={submit} key={loan ? `${loan.shield}${loan.borrower}${loan.market}` : "new"}>
         <label className="wide">
-          Morpho market id
-          <input name="market" defaultValue={loan.market} spellCheck={false} autoComplete="off" />
+          Borrower's wallet address
+          <input name="borrower" defaultValue={loan?.borrower ?? ""} placeholder="0x…" spellCheck={false} autoComplete="off" />
         </label>
+        <details className="wide advanced">
+          <summary>Another contract or market</summary>
+          <div className="lookup" style={{ marginTop: 12 }}>
+            <label>
+              Loan Shield contract
+              <input name="shield" defaultValue={loan?.shield ?? DEFAULTS.shield} placeholder="0x…" spellCheck={false} autoComplete="off" />
+            </label>
+            <label>
+              Morpho market id
+              <input name="market" defaultValue={loan?.market ?? DEFAULTS.market} spellCheck={false} autoComplete="off" />
+            </label>
+          </div>
+        </details>
         <div className="row">
           <button type="submit" className="btn primary sm">
             Show loan <IconArrow />
@@ -261,175 +265,170 @@ function Lookup({ loan, open }: { loan: Loan; open: boolean }) {
   );
 }
 
-export default function Dashboard() {
-  useTitle("Live dashboard");
-  const loan = useLoanFromUrl();
+/** "Read at block N" for a page header. */
+export function ReadStatus({ loan }: { loan: Loan }) {
+  const { block } = useLive(loan);
+  return (
+    <span className="small muted">{block !== undefined ? `Read at block ${block.toLocaleString("en-US")}, refreshed every 20 s` : "Reading from Arc…"}</span>
+  );
+}
+
+/**
+ * The live dashboard for one loan. `owner` renders right under the summary: the owner's own controls on their page.
+ * `hideKeeper` leaves out the keeper card, for a page that says who watches the loan itself.
+ */
+export function LoanDashboard({ loan, badge, owner, hideKeeper = false }: { loan: Loan; badge?: string; owner?: ReactNode; hideKeeper?: boolean }) {
   const valid = isValidLoan(loan);
-  const { market, loan: s, history, error, block } = useLive(loan);
-  const isDemo = (["shield", "borrower", "market"] as const).every((k) => loan[k].toLowerCase() === DEFAULTS[k].toLowerCase());
+  const { market, loan: s, history, error } = useLive(loan);
   const price = market ? web.collateralPrice(market) : 0;
   const o = s ? web.outlook(s, price) : undefined;
 
-  return (
-    <div className="container" style={{ paddingTop: 40 }}>
-      <Reveal className="card-head" style={{ marginBottom: 24 }}>
+  if (!valid) return <p className="result bad">That link doesn't name a loan: the contract and borrower must be 0x addresses and the market a 32-byte id.</p>;
+  if (!s || !market) {
+    return error ? (
+      <section className="card">
+        <h3>Couldn't read this loan</h3>
+        <p className="muted" style={{ marginTop: 8 }}>
+          {error}
+        </p>
+      </section>
+    ) : (
+      <section className="card dash-hero" aria-busy="true">
         <div>
-          <span className="eyebrow">Live dashboard</span>
-          <h2 style={{ fontSize: "clamp(28px, 3.4vw, 42px)" }}>{isDemo ? "The demo loan, protected" : "A protected loan"}</h2>
+          <span className="skel" style={{ width: 90, height: 26 }} />
+          <h1 className="headline">Reading the loan from Arc…</h1>
+          <p className="subline">
+            <span className="skel" style={{ width: "80%" }} />
+          </p>
         </div>
-        <span className="small muted">
-          {block !== undefined ? `Read at block ${block.toLocaleString("en-US")}, refreshed every 20 s` : "Reading from Arc…"} · nothing is sent
-        </span>
-      </Reveal>
+        <div className="skel" style={{ width: 240, height: 240, borderRadius: "50%" }} />
+      </section>
+    );
+  }
 
-      {!valid ? (
-        <div className="stack">
-          <p className="result bad">That link doesn't name a loan: the contract and borrower must be 0x addresses and the market a 32-byte id.</p>
-          <Lookup loan={loan} open />
-        </div>
-      ) : !s || !market ? (
-        <div className="stack">
-          {error ? (
-            <section className="card">
-              <h3>Couldn't read this loan</h3>
-              <p className="muted" style={{ marginTop: 8 }}>{error}</p>
-            </section>
-          ) : (
-            <section className="card dash-hero" aria-busy="true">
-              <div>
-                <span className="skel" style={{ width: 90, height: 26 }} />
-                <h1 className="headline">Reading the loan from Arc…</h1>
-                <p className="subline">
-                  <span className="skel" style={{ width: "80%" }} />
-                </p>
-              </div>
-              <div className="skel" style={{ width: 240, height: 240, borderRadius: "50%" }} />
-            </section>
-          )}
-          <Lookup loan={loan} open={!!error} />
-        </div>
-      ) : (
-        <div className="stack">
-          {error && <p className="result bad" role="status">Arc RPC error, showing the last good read: {error}</p>}
-          <Hero loan={loan} s={s} o={o} price={price} isDemo={isDemo} />
+  return (
+    <div className="stack">
+      {error && <p className="result bad" role="status">Arc RPC error, showing the last good read: {error}</p>}
+      <Hero loan={loan} s={s} o={o} price={price} badge={badge} />
+      {owner}
 
-          {o && (
-            <Reveal>
-              <section className="card">
-                <div className="card-head">
-                  <h3>How far BTC can fall</h3>
-                  <span className="small muted">BTC price, market oracle</span>
-                </div>
-                <Runway s={s} o={o} price={price} rows={ladder(s, o, price)} />
-                <p className="note">These prices assume only the BTC price moves: no interest, no top-ups or withdrawals. They also assume each rescue lands before a liquidator acts.</p>
-              </section>
-            </Reveal>
-          )}
-
-          <Tiles s={s} o={o} price={price} m={market} />
-
-          <div className="grid2">
-            <Reveal>
-              <section className="card" style={{ height: "100%" }}>
-                <div className="card-head">
-                  <h3>What happens next</h3>
-                </div>
-                <ol className="steps">
-                  {steps(s, o, price, verdict(s), market).map((st) => (
-                    <li key={st.title} className={st.tone}>
-                      <b>{st.title}</b>
-                      <p>{st.text}</p>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-            </Reveal>
-            <Reveal delay={0.08}>
-              <section className="card" style={{ height: "100%" }}>
-                <div className="card-head">
-                  <h3>Rescue vs liquidation</h3>
-                </div>
-                <div className="table-scroll">
-                <table className="compare">
-                  <thead>
-                    <tr>
-                      <th scope="col"></th>
-                      <th scope="col" className="us">Loan Shield rescue</th>
-                      <th scope="col">Morpho liquidation</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {compareRows(s, market).map((r) => (
-                      <tr key={r.label}>
-                        <th scope="row">{r.label}</th>
-                        <td className="us">{r.us}</td>
-                        <td>{r.them}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                </div>
-              </section>
-            </Reveal>
-          </div>
-
-          {history ? (
-            <History events={history.events} deployedAt={history.deployedAt} />
-          ) : (
-            <section className="card">
-              <div className="card-head">
-                <h3>Rescue history</h3>
-              </div>
-              <p className="empty">Searching every block since the deploy…</p>
-            </section>
-          )}
-
-          <div className="grid2">
-            <DryRun loan={loan} />
-            <Keeper />
-          </div>
-
+      {o && (
+        <Reveal>
           <section className="card">
             <div className="card-head">
-              <h3>The market this loan borrows from</h3>
-              <Link to="/market" className="link small">
-                Market details
-              </Link>
+              <h3>How far BTC can fall</h3>
+              <span className="small muted">BTC price, market oracle</span>
             </div>
-            <dl className="stats">
-              <div>
-                <dt>BTC price (market oracle)</dt>
-                <dd>
-                  <CountUp value={price} format={(n) => `$${Math.round(n).toLocaleString("en-US")}`} />
-                </dd>
-              </div>
-              <div>
-                <dt>Liquidation threshold</dt>
-                <dd>{(Number(market.lltv) / 1e16).toFixed(0)}%</dd>
-              </div>
-              <div>
-                <dt>Liquidation bonus</dt>
-                <dd>{((web.liquidationIncentive(market.lltv) - 1) * 100).toFixed(2)}%</dd>
-              </div>
-            </dl>
+            <Runway s={s} o={o} price={price} rows={ladder(s, o, price)} />
+            <p className="note">These prices assume only the BTC price moves: no interest, no top-ups or withdrawals. They also assume each rescue lands before a liquidator acts.</p>
           </section>
+        </Reveal>
+      )}
 
-          <section className="card">
+      <Tiles s={s} o={o} price={price} m={market} />
+
+      <div className="grid2">
+        <Reveal>
+          <section className="card" style={{ height: "100%" }}>
             <div className="card-head">
-              <h3>Why the buffer is safe</h3>
+              <h3>What happens next</h3>
             </div>
-            <ul className="checks">
-              {SAFETY.map((t) => (
-                <li key={t}>
-                  <IconCheck /> <span>{t}</span>
+            <ol className="steps">
+              {steps(s, o, price, verdict(s), market).map((st) => (
+                <li key={st.title} className={st.tone}>
+                  <b>{st.title}</b>
+                  <p>{st.text}</p>
                 </li>
               ))}
-            </ul>
+            </ol>
           </section>
+        </Reveal>
+        <Reveal delay={0.08}>
+          <section className="card" style={{ height: "100%" }}>
+            <div className="card-head">
+              <h3>Rescue vs liquidation</h3>
+            </div>
+            <div className="table-scroll">
+            <table className="compare">
+              <thead>
+                <tr>
+                  <th scope="col"></th>
+                  <th scope="col" className="us">Loan Shield rescue</th>
+                  <th scope="col">Morpho liquidation</th>
+                </tr>
+              </thead>
+              <tbody>
+                {compareRows(s, market).map((r) => (
+                  <tr key={r.label}>
+                    <th scope="row">{r.label}</th>
+                    <td className="us">{r.us}</td>
+                    <td>{r.them}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            </div>
+          </section>
+        </Reveal>
+      </div>
 
-          <Lookup loan={loan} open={false} />
+      {history ? (
+        <History events={history.events} deployedAt={history.deployedAt} />
+      ) : (
+        <section className="card">
+          <div className="card-head">
+            <h3>Rescue history</h3>
+          </div>
+          <p className="empty">Searching every block since the deploy…</p>
+        </section>
+      )}
+
+      {hideKeeper ? (
+        <DryRun loan={loan} />
+      ) : (
+        <div className="grid2">
+          <DryRun loan={loan} />
+          <Keeper />
         </div>
       )}
+
+      <section className="card">
+        <div className="card-head">
+          <h3>The market this loan borrows from</h3>
+          <Link to="/market" className="link small">
+            Market details
+          </Link>
+        </div>
+        <dl className="stats">
+          <div>
+            <dt>BTC price (market oracle)</dt>
+            <dd>
+              <CountUp value={price} format={(n) => `$${Math.round(n).toLocaleString("en-US")}`} />
+            </dd>
+          </div>
+          <div>
+            <dt>Liquidation threshold</dt>
+            <dd>{(Number(market.lltv) / 1e16).toFixed(0)}%</dd>
+          </div>
+          <div>
+            <dt>Liquidation bonus</dt>
+            <dd>{((web.liquidationIncentive(market.lltv) - 1) * 100).toFixed(2)}%</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3>Why the buffer is safe</h3>
+        </div>
+        <ul className="checks">
+          {SAFETY.map((t) => (
+            <li key={t}>
+              <IconCheck /> <span>{t}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }

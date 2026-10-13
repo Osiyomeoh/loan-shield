@@ -191,7 +191,7 @@ export default function Market() {
             </div>
           </div>
           <div className="btn-row" style={{ marginTop: 22 }}>
-            <Link to="/app" className="btn primary sm">
+            <Link to="/demo" className="btn primary sm">
               See a protected loan in this market <IconArrow />
             </Link>
           </div>

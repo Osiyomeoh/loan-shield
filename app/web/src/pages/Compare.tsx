@@ -177,7 +177,7 @@ export default function Compare() {
             </li>
           </ul>
           <div className="btn-row" style={{ marginTop: 22 }}>
-            <Link to="/app" className="btn primary sm">
+            <Link to="/demo" className="btn primary sm">
               See it on a live loan <IconArrow />
             </Link>
             <Link to="/how-it-works" className="btn ghost sm">

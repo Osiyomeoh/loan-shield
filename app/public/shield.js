@@ -1,10 +1,14 @@
 // @ts-check
 // Reads Loan Shield and Morpho Blue state from Arc mainnet over plain JSON-RPC, in the browser or in Node.
-// No dependencies and no wallet: every request is a read (eth_call, eth_getLogs, eth_getCode). The selectors and
-// topics below are checked against the compiled contract and against viem's encoder by test/web.test.ts.
+// No dependencies and no keys: every request it sends is a read (eth_call, eth_getLogs, eth_getCode). It also builds
+// the calldata for an owner's own transactions (approve, deposit, withdraw, setPolicy, clearPolicy), which the site
+// hands to the owner's wallet to sign. The selectors and topics below are checked against the compiled contract and
+// against viem's encoder by test/web.test.ts.
 
 export const ARC = { chainId: 5042, rpc: "https://rpc.mainnet.arc.io", explorer: "https://explorer.arc.io" };
 export const MORPHO = "0x34CD04070dD72b14E241112F6d83812Df5Af7fCD";
+/** Arc's USDC: the ERC-20 interface (6 decimals) to the native gas token, so one balance pays deposits and gas. */
+export const USDC = "0x3600000000000000000000000000000000000000";
 /** The USDC/cirBTC Morpho market (LLTV 0.86) that Borrow Kit lends from. */
 export const CIRBTC_MARKET = "0xc2db905f174e5defcce01d321b09f15f78856a36a21b90cc7e1abbc29225815d";
 
@@ -14,11 +18,18 @@ export const SELECTORS = {
   healthFactor: "0xf638e194", // healthFactor(address,bytes32)
   preview: "0x4d86e257", // preview(address,bytes32)
   rescue: "0x5a5668e2", // rescue(address,bytes32)
+  deposit: "0xb6b55f25", // deposit(uint256)
+  withdraw: "0x2e1a7d4d", // withdraw(uint256)
+  setPolicy: "0x76921b31", // setPolicy(bytes32,uint256,uint256)
+  clearPolicy: "0x893be04a", // clearPolicy(bytes32)
   position: "0x93c52062", // Morpho position(bytes32,address)
   market: "0x5c60e39a", // Morpho market(bytes32)
   idToMarketParams: "0x2c3c9157", // Morpho idToMarketParams(bytes32)
   price: "0xa035b1fe", // oracle price()
   decimals: "0x313ce567", // ERC-20 decimals()
+  balanceOf: "0x70a08231", // ERC-20 balanceOf(address)
+  allowance: "0xdd62ed3e", // ERC-20 allowance(address,address)
+  approve: "0x095ea7b3", // ERC-20 approve(address,uint256)
 };
 
 /** LoanShield's custom errors by selector. */
@@ -57,13 +68,17 @@ export const isAddress = (value) => typeof value === "string" && /^0x[0-9a-fA-F]
 /** @param {unknown} value */
 export const isBytes32 = (value) => typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
 
-/** An address or bytes32 as one 32-byte ABI word (64 hex chars, no 0x). @param {string} hex */
-export function word(hex) {
-  if (!/^0x[0-9a-fA-F]{1,64}$/.test(hex)) throw new Error(`not a 32-byte hex value: ${hex}`);
-  return hex.slice(2).toLowerCase().padStart(64, "0");
+/** An address, bytes32 or uint256 as one 32-byte ABI word (64 hex chars, no 0x). @param {string | bigint} value */
+export function word(value) {
+  if (typeof value === "bigint") {
+    if (value < 0n || value > MAX_UINT256) throw new Error(`not a uint256: ${value}`);
+    return value.toString(16).padStart(64, "0");
+  }
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(value)) throw new Error(`not a 32-byte hex value: ${value}`);
+  return value.slice(2).toLowerCase().padStart(64, "0");
 }
 
-/** Calldata for a function whose arguments are all addresses or bytes32. @param {string} selector @param {...string} args */
+/** Calldata for a function whose arguments are all static words: addresses, bytes32 or uint256 (as bigint). @param {string} selector @param {...(string | bigint)} args */
 export function encodeCall(selector, ...args) {
   return selector + args.map(word).join("");
 }
@@ -323,4 +338,107 @@ export async function rescueHistory(rpc, { shield, borrower, market, fromBlock, 
       healthFactorAfter,
     };
   });
+}
+
+// ── The owner's own transactions ────────────────────────────────────────────────────────────────────────────────────
+// The site builds these and the owner's wallet signs and sends them. Nothing here holds a key or sends a transaction.
+
+/**
+ * A decimal string as base units, e.g. ("2.5", 6) → 2500000n. Rejects signs, exponents and extra decimals.
+ * @param {string} text @param {number} decimals
+ */
+export function parseUnits(text, decimals) {
+  const t = text.trim();
+  if (!/^(\d+\.?\d*|\.\d+)$/.test(t)) throw new Error("enter a number, like 5 or 2.5");
+  const [whole = "", frac = ""] = t.split(".");
+  if (frac.length > decimals) throw new Error(`at most ${decimals} decimals`);
+  return BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, "0") || "0");
+}
+
+/** Why `setPolicy` would revert InvalidPolicy, or undefined: it needs 1 < trigger < target ≤ 10. @param {bigint} trigger @param {bigint} target */
+export function policyError(trigger, target) {
+  if (trigger <= WAD) return "the trigger must be above 1.00, where liquidation starts";
+  if (target <= trigger) return "the target must be above the trigger";
+  if (target > 10n * WAD) return "the target can be at most 10.00";
+  return undefined;
+}
+
+/**
+ * The owner's wallet USDC, what the shield may pull from it, and their buffer.
+ * @param {Rpc} rpc @param {{ shield: string, owner: string }} who
+ */
+export async function readWallet(rpc, { shield, owner }) {
+  const [balance, allowance, buffer] = await Promise.all([
+    rpc.call(USDC, encodeCall(SELECTORS.balanceOf, owner)),
+    rpc.call(USDC, encodeCall(SELECTORS.allowance, owner, shield)),
+    rpc.call(shield, encodeCall(SELECTORS.buffer, owner)),
+  ]);
+  return { balance: decodeFields(balance, ["v"]).v, allowance: decodeFields(allowance, ["v"]).v, buffer: decodeFields(buffer, ["v"]).v };
+}
+
+/** @typedef {{ kind: "approve" | "deposit" | "withdraw" | "setPolicy" | "clearPolicy", to: string, data: string }} OwnerTx */
+
+/** One owner transaction's target and calldata. */
+export const ownerTx = {
+  /** @param {string} shield @param {bigint} amount @returns {OwnerTx} */
+  approve: (shield, amount) => ({ kind: "approve", to: USDC, data: encodeCall(SELECTORS.approve, shield, amount) }),
+  /** @param {string} shield @param {bigint} amount @returns {OwnerTx} */
+  deposit: (shield, amount) => ({ kind: "deposit", to: shield, data: encodeCall(SELECTORS.deposit, amount) }),
+  /** @param {string} shield @param {bigint} amount @returns {OwnerTx} */
+  withdraw: (shield, amount) => ({ kind: "withdraw", to: shield, data: encodeCall(SELECTORS.withdraw, amount) }),
+  /** @param {string} shield @param {string} market @param {bigint} trigger @param {bigint} target @returns {OwnerTx} */
+  setPolicy: (shield, market, trigger, target) => ({ kind: "setPolicy", to: shield, data: encodeCall(SELECTORS.setPolicy, market, trigger, target) }),
+  /** @param {string} shield @param {string} market @returns {OwnerTx} */
+  clearPolicy: (shield, market) => ({ kind: "clearPolicy", to: shield, data: encodeCall(SELECTORS.clearPolicy, market) }),
+};
+
+/**
+ * The transactions that add `amount` to the buffer and set the policy, as scripts/protect.ts sends them: approve
+ * exactly the amount (skipped when the allowance already covers it), deposit, then setPolicy (skipped when the
+ * policy is already this one).
+ * @param {{ shield: string, market: string, amount: bigint, allowance: bigint, trigger: bigint, target: bigint, current?: { trigger: bigint, target: bigint } }} plan
+ */
+export function planProtect({ shield, market, amount, allowance, trigger, target, current }) {
+  const why = policyError(trigger, target);
+  if (why) throw new Error(why);
+  /** @type {OwnerTx[]} */
+  const txs = [];
+  if (amount > 0n) {
+    if (allowance < amount) txs.push(ownerTx.approve(shield, amount));
+    txs.push(ownerTx.deposit(shield, amount));
+  }
+  if (current?.trigger !== trigger || current?.target !== target) txs.push(ownerTx.setPolicy(shield, market, trigger, target));
+  return txs;
+}
+
+/**
+ * Runs a transaction as an eth_call from its sender, to catch a revert before the wallet asks for a signature.
+ * @param {Rpc} rpc @param {{ from: string, to: string, data: string }} tx
+ * @returns {Promise<{ ok: true } | { ok: false, name: string, args: bigint[], message?: string }>}
+ */
+export async function simulateTx(rpc, { from, to, data }) {
+  try {
+    await rpc.request("eth_call", [{ from, to, data }, "latest"]);
+    return { ok: true };
+  } catch (err) {
+    const e = /** @type {{ data?: unknown, message?: string }} */ (err);
+    const revert = decodeRevert(e.data);
+    if (revert) return { ok: false, ...revert };
+    if (/revert/i.test(e.message ?? "")) return { ok: false, name: "Reverted", args: [], message: e.message };
+    throw err;
+  }
+}
+
+/**
+ * Polls for a transaction's receipt.
+ * @param {Rpc} rpc @param {string} hash
+ * @returns {Promise<{ ok: boolean, blockNumber: bigint }>}
+ */
+export async function waitForReceipt(rpc, hash, { intervalMs = 1000, timeoutMs = 120_000, sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  for (let waited = 0; waited <= timeoutMs; waited += intervalMs) {
+    const receipt = await rpc.request("eth_getTransactionReceipt", [hash]);
+    if (receipt) return { ok: receipt.status === "0x1", blockNumber: BigInt(receipt.blockNumber) };
+    await sleep(intervalMs);
+  }
+  throw new Error(`no receipt for ${hash} after ${Math.round(timeoutMs / 1000)} s`);
 }

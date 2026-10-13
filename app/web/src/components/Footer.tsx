@@ -10,11 +10,12 @@ export function Footer() {
       <div className="container footer-grid">
         <div className="footer-brand">
           <Brand />
-          <p className="muted">Standby USDC that rescues your Morpho loan on Arc before a liquidator can take your BTC. Every number on this site is read live from Arc mainnet in your browser. No wallet, no sign-in.</p>
+          <p className="muted">Standby USDC that rescues your Morpho loan on Arc before a liquidator can take your BTC. Every number on this site is read live from Arc mainnet in your browser. Reading needs no wallet; protecting your loan uses your own.</p>
         </div>
         <div>
           <h4>Product</h4>
-          <Link to="/app">Live dashboard</Link>
+          <Link to="/app">My loan</Link>
+          <Link to="/demo">Live demo</Link>
           <Link to="/how-it-works">How it works</Link>
           <Link to="/compare">Compare</Link>
           <Link to="/market">Market</Link>

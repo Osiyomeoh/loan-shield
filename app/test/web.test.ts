@@ -7,13 +7,14 @@ import {
   encodeEventTopics,
   encodeFunctionData,
   encodeFunctionResult,
+  erc20Abi,
   maxUint256,
   parseAbi,
   toFunctionSelector,
   type AbiFunction,
 } from "viem";
 import { loanShieldAbi } from "../src/abi.js";
-import { CIRBTC_MARKET as APP_MARKET, MORPHO as APP_MORPHO, STATUS as APP_STATUS } from "../src/config.js";
+import { CIRBTC_MARKET as APP_MARKET, MORPHO as APP_MORPHO, STATUS as APP_STATUS, USDC as APP_USDC } from "../src/config.js";
 import * as web from "../public/shield.js";
 import { ADA, TUNDE, WAD } from "./fakes.js";
 
@@ -28,8 +29,11 @@ const morphoAbi = parseAbi([
 
 test("selectors, error selectors and the Rescued topic match the compiled contract", () => {
   const fn = (name: string) => loanShieldAbi.find((x) => x.type === "function" && x.name === name) as AbiFunction;
-  for (const name of ["buffer", "policy", "healthFactor", "preview", "rescue"] as const) {
+  for (const name of ["buffer", "policy", "healthFactor", "preview", "rescue", "deposit", "withdraw", "setPolicy", "clearPolicy"] as const) {
     assert.equal(web.SELECTORS[name], toFunctionSelector(fn(name)), name);
+  }
+  for (const name of ["balanceOf", "allowance", "approve"] as const) {
+    assert.equal(web.SELECTORS[name], toFunctionSelector(erc20Abi.find((x) => x.type === "function" && x.name === name) as AbiFunction), name);
   }
   for (const name of ["position", "market", "idToMarketParams", "price", "decimals"] as const) {
     assert.equal(web.SELECTORS[name], toFunctionSelector(morphoAbi.find((x) => x.name === name)!), name);
@@ -43,6 +47,7 @@ test("selectors, error selectors and the Rescued topic match the compiled contra
   assert.equal(web.RESCUED_TOPIC, encodeEventTopics({ abi: loanShieldAbi, eventName: "Rescued" })[0]);
   assert.deepEqual(web.STATUS, [...APP_STATUS]);
   assert.equal(web.MORPHO, APP_MORPHO);
+  assert.equal(web.USDC, APP_USDC);
   assert.equal(web.CIRBTC_MARKET, APP_MARKET);
 });
 
@@ -297,6 +302,110 @@ test("the RPC client waits and retries when rate-limited, and gives up after the
   const down = (async () => (sent++, new Response("", { status: 500 }))) as unknown as typeof fetch;
   await assert.rejects(web.createRpc("http://rpc.test", down, sleep).blockNumber(), /HTTP 500/);
   assert.equal(sent, 1, "other HTTP errors are not retried");
+});
+
+test("owner transactions encode like viem, uint256 words included", () => {
+  const amount = 12_345_678n;
+  const [trigger, target] = [(13n * WAD) / 10n, (18n * WAD) / 10n];
+  assert.deepEqual(web.ownerTx.approve(SHIELD, amount), { kind: "approve", to: web.USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [SHIELD, amount] }) });
+  assert.equal(web.ownerTx.deposit(SHIELD, amount).data, encodeFunctionData({ abi: loanShieldAbi, functionName: "deposit", args: [amount] }));
+  assert.equal(web.ownerTx.withdraw(SHIELD, maxUint256).data, encodeFunctionData({ abi: loanShieldAbi, functionName: "withdraw", args: [maxUint256] }));
+  assert.equal(
+    web.ownerTx.setPolicy(SHIELD, TUNDE.marketId, trigger, target).data,
+    encodeFunctionData({ abi: loanShieldAbi, functionName: "setPolicy", args: [TUNDE.marketId, trigger, target] }),
+  );
+  assert.equal(web.ownerTx.clearPolicy(SHIELD, TUNDE.marketId).data, encodeFunctionData({ abi: loanShieldAbi, functionName: "clearPolicy", args: [TUNDE.marketId] }));
+  assert.equal(web.ownerTx.deposit(SHIELD, 1n).to, SHIELD);
+  assert.throws(() => web.word(-1n));
+  assert.throws(() => web.word(maxUint256 + 1n));
+});
+
+test("parseUnits reads what a person types and refuses what USDC can't hold", () => {
+  assert.equal(web.parseUnits("5", 6), 5_000_000n);
+  assert.equal(web.parseUnits(" 2.5 ", 6), 2_500_000n);
+  assert.equal(web.parseUnits(".000001", 6), 1n);
+  assert.equal(web.parseUnits("7.", 6), 7_000_000n);
+  assert.equal(web.parseUnits("1.3", 18), (13n * WAD) / 10n);
+  for (const bad of ["", "-1", "1e3", "1,000", "abc", "1.2.3", "."]) assert.throws(() => web.parseUnits(bad, 6), /enter a number/, bad);
+  assert.throws(() => web.parseUnits("0.0000001", 6), /at most 6 decimals/);
+});
+
+test("policyError mirrors setPolicy's bounds: 1 < trigger < target <= 10", () => {
+  const w = (x: number) => (BigInt(Math.round(x * 1000)) * WAD) / 1000n;
+  assert.equal(web.policyError(w(1.3), w(1.8)), undefined);
+  assert.equal(web.policyError(w(9.9), w(10)), undefined);
+  assert.match(web.policyError(WAD, w(1.8))!, /trigger must be above 1\.00/);
+  assert.match(web.policyError(w(1.8), w(1.8))!, /target must be above the trigger/);
+  assert.match(web.policyError(w(1.5), w(10.001))!, /at most 10\.00/);
+});
+
+test("planProtect: approve exactly what's missing, deposit, and set the policy only if it changes", () => {
+  const [trigger, target] = [(13n * WAD) / 10n, (18n * WAD) / 10n];
+  const base = { shield: SHIELD, market: TUNDE.marketId, trigger, target };
+  assert.deepEqual(
+    web.planProtect({ ...base, amount: 5_000_000n, allowance: 0n }).map((t) => t.kind),
+    ["approve", "deposit", "setPolicy"],
+  );
+  assert.equal(web.planProtect({ ...base, amount: 5_000_000n, allowance: 0n })[0]!.data, web.ownerTx.approve(SHIELD, 5_000_000n).data, "approves the amount, not unlimited");
+  assert.deepEqual(
+    web.planProtect({ ...base, amount: 5_000_000n, allowance: 5_000_000n }).map((t) => t.kind),
+    ["deposit", "setPolicy"],
+  );
+  assert.deepEqual(
+    web.planProtect({ ...base, amount: 0n, allowance: 0n, current: { trigger: WAD + 1n, target } }).map((t) => t.kind),
+    ["setPolicy"],
+  );
+  assert.deepEqual(
+    web.planProtect({ ...base, amount: 1n, allowance: 9n, current: { trigger, target } }).map((t) => t.kind),
+    ["deposit"],
+  );
+  assert.deepEqual(web.planProtect({ ...base, amount: 0n, allowance: 0n, current: { trigger, target } }), []);
+  assert.throws(() => web.planProtect({ ...base, trigger: target, amount: 1n, allowance: 0n }), /target must be above/);
+});
+
+test("readWallet asks USDC for the balance and allowance and the shield for the buffer", async () => {
+  const owner = TUNDE.borrower;
+  const { rpc, calls } = fakeRpc((_method, [tx]) => {
+    if (tx.data === web.encodeCall(web.SELECTORS.balanceOf, owner)) return encodeFunctionResult({ abi: erc20Abi, functionName: "balanceOf", result: 7_000_000n });
+    if (tx.data === web.encodeCall(web.SELECTORS.allowance, owner, SHIELD)) return encodeFunctionResult({ abi: erc20Abi, functionName: "allowance", result: 3n });
+    if (tx.data === web.encodeCall(web.SELECTORS.buffer, owner)) return encodeFunctionResult({ abi: loanShieldAbi, functionName: "buffer", result: 2_000_000n });
+    throw new Error(`unexpected ${tx.data}`);
+  });
+  assert.deepEqual(await web.readWallet(rpc, { shield: SHIELD, owner }), { balance: 7_000_000n, allowance: 3n, buffer: 2_000_000n });
+  assert.deepEqual(calls.map((c) => c.params[0].to), [web.USDC, web.USDC, SHIELD]);
+});
+
+test("simulateTx runs from the owner and names LoanShield's errors; other reverts stay readable", async () => {
+  const tx = { from: TUNDE.borrower, ...web.ownerTx.withdraw(SHIELD, 9n) };
+  const short = fakeRpc(() => {
+    throw revert(encodeErrorResult({ abi: loanShieldAbi, errorName: "InsufficientBuffer", args: [1n, 9n] }));
+  });
+  assert.deepEqual(await web.simulateTx(short.rpc, tx), { ok: false, name: "InsufficientBuffer", args: [1n, 9n] });
+  assert.equal(short.calls[0]?.params[0].from, TUNDE.borrower);
+
+  const erc20 = fakeRpc(() => {
+    throw revert("0x08c379a0");
+  });
+  assert.deepEqual(await web.simulateTx(erc20.rpc, tx), { ok: false, name: "Reverted", args: [], message: "RPC eth_call: execution reverted" });
+
+  const fine = fakeRpc(() => "0x");
+  assert.deepEqual(await web.simulateTx(fine.rpc, tx), { ok: true });
+});
+
+test("waitForReceipt polls until the receipt exists and reports its status", async () => {
+  let polls = 0;
+  const { rpc } = fakeRpc((method) => {
+    assert.equal(method, "eth_getTransactionReceipt");
+    return ++polls < 3 ? null : { status: "0x1", blockNumber: "0x2a" };
+  });
+  assert.deepEqual(await web.waitForReceipt(rpc, "0xabc", { sleep: async () => {} }), { ok: true, blockNumber: 42n });
+  assert.equal(polls, 3);
+
+  const failed = fakeRpc(() => ({ status: "0x0", blockNumber: "0x1" }));
+  assert.deepEqual(await web.waitForReceipt(failed.rpc, "0xabc", { sleep: async () => {} }), { ok: false, blockNumber: 1n });
+
+  const never = fakeRpc(() => null);
+  await assert.rejects(web.waitForReceipt(never.rpc, "0xabc", { intervalMs: 10, timeoutMs: 30, sleep: async () => {} }), /no receipt for 0xabc after 0 s/);
 });
 
 function loan(p: { borrower: string; marketId: string }) {

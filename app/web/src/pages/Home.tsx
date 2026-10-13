@@ -5,7 +5,7 @@ import { DEFAULTS, REPO, web } from "../config";
 import { CountUp } from "../components/CountUp";
 import { HealthRing } from "../components/HealthRing";
 import { HeroVisual } from "../components/HeroVisual";
-import { IconArrow, IconBolt, IconCheck, IconClose, IconCoins, IconLock, IconShield } from "../components/Icons";
+import { IconArrow, IconBolt, IconCheck, IconClose, IconCoins, IconShield, IconWallet } from "../components/Icons";
 import { Explorer, Ext } from "../components/Links";
 import { LiveChip } from "../components/LiveChip";
 import { Marquee } from "../components/Marquee";
@@ -122,14 +122,14 @@ export default function Home() {
           </motion.p>
           <motion.div className="btn-row" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.85, duration: 0.7 }}>
             <Link to="/app" className="btn primary lg">
-              See the live demo loan <IconArrow />
+              <IconWallet width={18} height={18} /> Protect my loan <IconArrow />
             </Link>
-            <Link to="/how-it-works" className="btn ghost lg">
-              How it works
+            <Link to="/demo" className="btn ghost lg">
+              See the live demo loan
             </Link>
           </motion.div>
           <motion.ul className="trust" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 1.05, duration: 0.8 }}>
-            {["Read live from Arc mainnet", "No wallet, no sign-in", "No owner, no pause, no upgrade", "Open source, MIT"].map((t) => (
+            {["Read live from Arc mainnet", "Reading needs no wallet", "No owner, no pause, no upgrade", "Open source, MIT"].map((t) => (
               <li key={t}>
                 <IconCheck /> {t}
               </li>
@@ -291,8 +291,8 @@ export default function Home() {
             <div style={{ textAlign: "center" }}>
               {loan ? <HealthRing hf={loan.healthFactor} trigger={loan.trigger} target={loan.target} size={320} /> : <div style={{ aspectRatio: "1", maxWidth: 320, margin: "0 auto" }} className="skel" />}
               <p className="muted small" style={{ marginTop: 6 }}>The same loan right now, read live from Arc.</p>
-              <Link to="/app" className="btn ghost sm" style={{ marginTop: 14 }}>
-                Open the dashboard <IconArrow />
+              <Link to="/demo" className="btn ghost sm" style={{ marginTop: 14 }}>
+                Open the live demo <IconArrow />
               </Link>
             </div>
           </div>
@@ -373,14 +373,14 @@ export default function Home() {
         <Reveal>
           <div className="cta-band">
             <span className="eyebrow">Nothing to install</span>
-            <h2>Watch a protected loan live, block by block.</h2>
-            <p className="lead">Every number comes straight from Arc mainnet into your browser. No wallet, no sign-in, nothing sent.</p>
+            <h2>Protect your loan, or watch ours, block by block.</h2>
+            <p className="lead">Every number comes straight from Arc mainnet into your browser. Reading needs no wallet. To protect your own loan, connect it: your wallet shows and signs every step.</p>
             <div className="btn-row">
               <Link to="/app" className="btn primary lg">
-                Open the dashboard <IconArrow />
+                <IconWallet width={18} height={18} /> Protect my loan <IconArrow />
               </Link>
-              <Link to="/developers" className="btn ghost lg">
-                <IconLock /> Read the contract
+              <Link to="/demo" className="btn ghost lg">
+                See the live demo loan
               </Link>
             </div>
           </div>
